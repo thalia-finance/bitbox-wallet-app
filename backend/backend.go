@@ -231,7 +231,9 @@ type Backend struct {
 
 	// makeBtcAccount creates a BTC account. In production this is `btc.NewAccount`, but can be
 	// overridden in unit tests for mocking.
-	makeBtcAccount func(*accounts.AccountConfig, *btc.Coin, *types.GapLimits, func(coinpkg.Code, blockchain.ScriptHashHex) (*addresses.AccountAddress, error), *logrus.Entry) accounts.Interface
+	makeBtcAccount func(*accounts.AccountConfig, *btc.Coin, *types.GapLimits,
+		func(coinpkg.Code, blockchain.ScriptHashHex) (*addresses.AccountAddress, error),
+		*logrus.Entry) (accounts.Interface, error)
 	// makeEthAccount creates an ETH account. In production this is `eth.NewAccount`, but can be
 	// overridden in unit tests for mocking.
 	makeEthAccount func(*accounts.AccountConfig, *eth.Coin, *http.Client, *logrus.Entry) accounts.Interface
@@ -304,8 +306,20 @@ func NewBackend(arguments *arguments.Arguments, environment Environment) (*Backe
 		coins:    map[coinpkg.Code]coinpkg.Coin{},
 		accounts: []accounts.Interface{},
 		aopp:     AOPP{State: aoppStateInactive},
-		makeBtcAccount: func(config *accounts.AccountConfig, coin *btc.Coin, gapLimits *types.GapLimits, getAddress func(coinpkg.Code, blockchain.ScriptHashHex) (*addresses.AccountAddress, error), log *logrus.Entry) accounts.Interface {
-			return btc.NewAccount(config, coin, gapLimits, getAddress, log, hclient)
+		makeBtcAccount: func(config *accounts.AccountConfig,
+			coin *btc.Coin, gapLimits *types.GapLimits,
+			getAddress func(coinpkg.Code, blockchain.ScriptHashHex) (*addresses.AccountAddress, error),
+			log *logrus.Entry) (accounts.Interface, error) {
+
+			db, err := btc.DatabaseForAccount(config, log)
+			if err != nil {
+				return nil, err
+			}
+
+			return btc.NewAccount(
+				config, coin, gapLimits, getAddress, log,
+				hclient, db,
+			), nil
 		},
 		makeEthAccount: func(config *accounts.AccountConfig, coin *eth.Coin, httpClient *http.Client, log *logrus.Entry) accounts.Interface {
 			return eth.NewAccount(config, coin, httpClient, log, accountUpdate)

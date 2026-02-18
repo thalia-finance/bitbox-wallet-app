@@ -45,10 +45,11 @@ func mockAccount(t *testing.T, accountConfig *config.Account) *Account {
 	net := &chaincfg.TestNet3Params
 
 	dbFolder := test.TstTempDir("btc-dbfolder")
-	defer func() { _ = os.RemoveAll(dbFolder) }()
+	t.Cleanup(func() { _ = os.RemoveAll(dbFolder) })
 
 	coin := NewCoin(
-		code, "Bitcoin Testnet", unit, coin.BtcUnitDefault, net, dbFolder, nil, explorer, socksproxy.NewSocksProxy(false, ""))
+		code, "Bitcoin Testnet", unit, coin.BtcUnitDefault, net, dbFolder, nil, explorer, socksproxy.NewSocksProxy(false, ""),
+	)
 
 	blockchainMock := &blockchainMock.BlockchainMock{}
 	blockchainMock.MockRegisterOnConnectionErrorChangedEvent = func(f func(error)) {}
@@ -77,22 +78,21 @@ func mockAccount(t *testing.T, accountConfig *config.Account) *Account {
 	if accountConfig == nil {
 		accountConfig = defaultConfig
 	}
-
-	return NewAccount(
-		&accounts.AccountConfig{
-			Config:          accountConfig,
-			DBFolder:        dbFolder,
-			RateUpdater:     nil,
-			GetNotifier:     func(signing.Configurations) accounts.Notifier { return nil },
-			GetSaveFilename: func(suggestedFilename string) string { return suggestedFilename },
-			ConnectKeystore: func() (keystore.Keystore, error) {
-				return mockKeystore(), nil
-			},
+	acctCfg := &accounts.AccountConfig{
+		Config:          accountConfig,
+		DBFolder:        dbFolder,
+		RateUpdater:     nil,
+		GetNotifier:     func(signing.Configurations) accounts.Notifier { return nil },
+		GetSaveFilename: func(suggestedFilename string) string { return suggestedFilename },
+		ConnectKeystore: func() (keystore.Keystore, error) {
+			return mockKeystore(), nil
 		},
-		coin, nil, nil,
-		logging.Get().WithGroup("account_test"),
-		nil,
-	)
+	}
+	log := logging.Get().WithGroup("account_test")
+	db, err := DatabaseForAccount(acctCfg, log)
+	require.NoError(t, err)
+
+	return NewAccount(acctCfg, coin, nil, nil, log, nil, db)
 }
 
 func TestAccount(t *testing.T) {

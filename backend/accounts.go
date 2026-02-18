@@ -1102,13 +1102,18 @@ func (backend *Backend) createAndAddAccount(coin coinpkg.Coin, persistedConfig *
 
 	switch specificCoin := coin.(type) {
 	case *btc.Coin:
-		account = backend.makeBtcAccount(
+		var err error
+		account, err = backend.makeBtcAccount(
 			accountConfig,
 			specificCoin,
 			backend.gapLimits(),
 			getAddressByIDCallback,
 			backend.log,
 		)
+		if err != nil {
+			backend.log.WithError(err).Error("could not create BTC account")
+			return
+		}
 		backend.addAccount(account)
 	case *eth.Coin:
 		account = backend.makeEthAccount(accountConfig, specificCoin, backend.httpClient, backend.log)

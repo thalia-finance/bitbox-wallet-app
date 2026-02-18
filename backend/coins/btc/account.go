@@ -78,19 +78,42 @@ const (
 	UsedAddressTypeChange UsedAddressType = "change"
 )
 
+// DatabaseForAccount creates a database for the account in the given folder,
+// and returns it.
+func DatabaseForAccount(config *accounts.AccountConfig,
+	log *logrus.Entry) (transactions.DBInterface, error) {
+
+	accountIdentifier := fmt.Sprintf("account-%s", config.Config.Code)
+	dbSubfolder := path.Join(config.DBFolder, accountIdentifier)
+	if err := os.MkdirAll(dbSubfolder, 0700); err != nil {
+		return nil, errp.WithStack(err)
+	}
+
+	dbName := fmt.Sprintf("%s.db", accountIdentifier)
+	log.Debugf("Opening the database '%s' to persist the transactions.",
+		dbName)
+	db, err := transactionsdb.NewDB(path.Join(config.DBFolder, dbName))
+	if err != nil {
+		return nil, err
+	}
+	log.Debugf("Opened the database '%s' to persist the transactions.",
+		dbName)
+
+	return db, nil
+}
+
 // Account is a account whose addresses are derived from an xpub.
 type Account struct {
 	*accounts.BaseAccount
 
-	coin *Coin
-	// folder for this specific account. It is a subfolder of dbFolder. Full path.
-	dbSubfolder    string
+	coin           *Coin
 	db             transactions.DBInterface
 	forceGapLimits *types.GapLimits
 	notifier       accounts.Notifier
 
 	// Once the account is initialized, this variable is only read.
 	subaccounts subaccounts
+
 	// How many addresses were synced already during the initial sync. This value is emitted as an
 	// event when it changes. This counter can overshoot if an address is updated more than once
 	// during initial sync (e.g. if there is a tx touching it). This should be rare and have no bad
@@ -137,6 +160,7 @@ func NewAccount(
 	getAddressFromSameKeystore func(coin.Code, addresses.AddressID) (*addresses.AccountAddress, error),
 	log *logrus.Entry,
 	httpClient *http.Client,
+	db transactions.DBInterface,
 ) *Account {
 	log = log.WithField("group", "btc").
 		WithFields(logrus.Fields{"coin": coin.String(), "code": config.Config.Code})
@@ -145,11 +169,11 @@ func NewAccount(
 	account := &Account{
 		BaseAccount:                accounts.NewBaseAccount(config, coin, log),
 		coin:                       coin,
-		dbSubfolder:                "", // set in Initialize()
 		forceGapLimits:             forceGapLimits,
 		getAddressFromSameKeystore: getAddressFromSameKeystore,
 		log:                        log,
 		httpClient:                 httpClient,
+		db:                         db,
 	}
 	return account
 }
@@ -291,19 +315,6 @@ func (account *Account) Initialize() error {
 	account.notifier = account.Config().GetNotifier(signingConfigurations)
 
 	accountIdentifier := fmt.Sprintf("account-%s", account.Config().Config.Code)
-	account.dbSubfolder = path.Join(account.Config().DBFolder, accountIdentifier)
-	if err := os.MkdirAll(account.dbSubfolder, 0700); err != nil {
-		return errp.WithStack(err)
-	}
-
-	dbName := fmt.Sprintf("%s.db", accountIdentifier)
-	account.log.Debugf("Opening the database '%s' to persist the transactions.", dbName)
-	db, err := transactionsdb.NewDB(path.Join(account.Config().DBFolder, dbName))
-	if err != nil {
-		return err
-	}
-	account.db = db
-	account.log.Debugf("Opened the database '%s' to persist the transactions.", dbName)
 
 	onConnectionStatusChanged := func(err error) {
 		if err != nil {

@@ -15,6 +15,10 @@ var once sync.Once
 
 // Get returns the configured logger or a new one based on the configuration file.
 func Get() *Logger {
+	if instance != nil {
+		return instance
+	}
+
 	once.Do(func() {
 		configuration := Configuration{
 			Output: filepath.Join(config.AppDir(), "log.txt"),
@@ -30,4 +34,8 @@ func Set(configuration *Configuration) {
 	once.Do(func() {
 		instance = NewLogger(configuration)
 	})
+}
+
+func OverwriteInstance(logger *Logger) {
+	instance = logger
 }
