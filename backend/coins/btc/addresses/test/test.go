@@ -37,7 +37,7 @@ func NewAddressChain(
 	}
 	configuration := signing.NewBitcoinConfiguration(
 		signing.ScriptTypeP2PKH, []byte{1, 2, 3, 4}, derivationPath, xpub)
-	return configuration, addresses.NewAddressChain(configuration, net, 20, false, isAddressUsed, log)
+	return configuration, addresses.NewAddressChain(configuration, net, 20, false, isAddressUsed, log, nil)
 }
 
 // GetAddress returns a dummy address for a given address type.

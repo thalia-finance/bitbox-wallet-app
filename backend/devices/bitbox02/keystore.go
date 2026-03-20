@@ -335,6 +335,29 @@ func (keystore *keystore) signBTCTransaction(btcProposedTx *btc.ProposedTransact
 		paymentRequestIndex = &prIndex
 	}
 
+	// Downstream account types whose script config the firmware can't
+	// infer from the PSBT (multisig, miniscript policies) attach the
+	// firmware-shaped config to their signing.Configuration extension.
+	// Probe each entry for the ScriptConfigProvider interface and use
+	// the first match. Standard single-sig flows have no Extension
+	// and skip this entirely.
+	var forceScriptConfig *messages.BTCScriptConfigWithKeypath
+	for _, cfg := range btcProposedTx.AccountSigningConfigurations {
+		if cfg.Extension == nil {
+			continue
+		}
+		provider, ok := cfg.Extension.(ScriptConfigProvider)
+		if !ok {
+			continue
+		}
+		sc, err := provider.BB02ScriptConfig(keystore.rootFinger)
+		if err != nil {
+			return errp.Wrap(err, "failed to build BB02 script config")
+		}
+		forceScriptConfig = sc
+		break
+	}
+
 	signOptions := &firmware.PSBTSignOptions{
 		FormatUnit:      formatUnit,
 		PaymentRequests: btcPaymentRequests,
@@ -344,6 +367,14 @@ func (keystore *keystore) signBTCTransaction(btcProposedTx *btc.ProposedTransact
 				PaymentRequestIndex:  paymentRequestIndex,
 			},
 		},
+		ForceScriptConfig: forceScriptConfig,
+		// When the proposal is a BIP-322 to_sign virtual transaction,
+		// forward the message so the firmware runs `process_bip322`:
+		// it validates the to_spend txid against `prev_out_hash`, the
+		// naked-OP_RETURN output, and uses the BIP-322 sighash
+		// (BIP-143 for v0 segwit, BIP-341 for taproot) instead of the
+		// regular tx-signing path that would reject version=0 outright.
+		Bip322Message: btcProposedTx.Bip322Message,
 	}
 
 	// Include previous transactions in PSBT if the BitBox requires it.

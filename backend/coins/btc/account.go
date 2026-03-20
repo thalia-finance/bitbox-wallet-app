@@ -347,10 +347,14 @@ func (account *Account) Initialize() error {
 		}
 		account.log.Infof("gap limits: receive=%d, change=%d", gapLimits.Receive, gapLimits.Change)
 
+		// addressFactory=nil → NewAccountAddress, which covers all
+		// standard single-sig script types. Downstream account types
+		// (multisig, miniscript) construct AddressChain directly with
+		// their own factory.
 		subacc.receiveAddresses = addresses.NewAddressChain(
-			signingConfiguration, account.coin.Net(), int(gapLimits.Receive), false, account.isAddressUsed, account.log)
+			signingConfiguration, account.coin.Net(), int(gapLimits.Receive), false, account.isAddressUsed, account.log, nil)
 		subacc.changeAddresses = addresses.NewAddressChain(
-			signingConfiguration, account.coin.Net(), int(gapLimits.Change), true, account.isAddressUsed, account.log)
+			signingConfiguration, account.coin.Net(), int(gapLimits.Change), true, account.isAddressUsed, account.log, nil)
 
 		account.subaccounts = append(account.subaccounts, subacc)
 	}

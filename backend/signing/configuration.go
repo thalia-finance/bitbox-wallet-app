@@ -206,10 +206,20 @@ type EthereumSimple struct {
 
 // Configuration models a signing configuration.
 type Configuration struct {
-	// Poor man's union type: only one of the below can be non-nil.
+	// Poor man's union type: at most one of BitcoinSimple /
+	// EthereumSimple / Extension is non-nil at a time. Extension holds
+	// downstream-defined configuration data (multisig, miniscript
+	// policies, ...) that doesn't fit the simple shapes — its
+	// implementation of ConfigurationExtension is consulted by every
+	// Configuration helper that would otherwise switch on the union.
+	//
+	// Extension is intentionally not JSON-serialised by Configuration:
+	// downstream consumers persist their own extension data through
+	// their own channels.
 
 	BitcoinSimple  *BitcoinSimple  `json:"bitcoinSimple,omitempty"`
 	EthereumSimple *EthereumSimple `json:"ethereumSimple,omitempty"`
+	Extension      ConfigurationExtension
 }
 
 // NewBitcoinConfiguration creates a new configuration.
@@ -254,13 +264,19 @@ func NewEthereumConfiguration(
 	}
 }
 
-// ScriptType returns the configuration's keypath.
+// ScriptType returns the configuration's script type.
 func (configuration *Configuration) ScriptType() ScriptType {
+	if configuration.Extension != nil {
+		return configuration.Extension.ScriptType()
+	}
 	return configuration.BitcoinSimple.ScriptType
 }
 
 // AbsoluteKeypath returns the configuration's keypath.
 func (configuration *Configuration) AbsoluteKeypath() AbsoluteKeypath {
+	if configuration.Extension != nil {
+		return configuration.Extension.AbsoluteKeypath()
+	}
 	if configuration.BitcoinSimple != nil {
 		return configuration.BitcoinSimple.KeyInfo.AbsoluteKeypath
 	}
@@ -268,7 +284,12 @@ func (configuration *Configuration) AbsoluteKeypath() AbsoluteKeypath {
 }
 
 // ExtendedPublicKey returns the configuration's extended public key.
+// For multi-key extensions a representative key is returned — callers
+// must not assume the configuration has exactly one xpub.
 func (configuration *Configuration) ExtendedPublicKey() *hdkeychain.ExtendedKey {
+	if configuration.Extension != nil {
+		return configuration.Extension.ExtendedPublicKey()
+	}
 	if configuration.BitcoinSimple != nil {
 		return configuration.BitcoinSimple.KeyInfo.ExtendedPublicKey
 	}
@@ -279,8 +300,12 @@ func (configuration *Configuration) ExtendedPublicKey() *hdkeychain.ExtendedKey 
 // The configuration keypath must be a BIP44 keypath:
 // m/purpose'/coin'/account' for Bitcoin-based coins.
 // m/44'/coin'/0'/0/account for Ethereum.
+// Extensions provide their own AccountNumber derivation.
 // For invalid keypaths, zero is returned for the account number, along with an error.
 func (configuration *Configuration) AccountNumber() (uint16, error) {
+	if configuration.Extension != nil {
+		return configuration.Extension.AccountNumber()
+	}
 	if configuration.BitcoinSimple != nil {
 		keypath := configuration.BitcoinSimple.KeyInfo.AbsoluteKeypath.ToUInt32()
 		if len(keypath) != 3 || keypath[2] < hdkeychain.HardenedKeyStart {
@@ -309,6 +334,9 @@ func (configuration *Configuration) PublicKey() *btcec.PublicKey {
 
 // String returns a short summary of the configuration to be used in logs, etc.
 func (configuration *Configuration) String() string {
+	if configuration.Extension != nil {
+		return configuration.Extension.String()
+	}
 	if configuration.BitcoinSimple != nil {
 		return fmt.Sprintf("bitcoinSimple;scriptType=%s;%s",
 			configuration.BitcoinSimple.ScriptType, configuration.BitcoinSimple.KeyInfo)
@@ -334,6 +362,9 @@ func (configs Configurations) AccountNumber() (uint16, error) {
 // known config.
 func (configs Configurations) RootFingerprint() ([]byte, error) {
 	for _, config := range configs {
+		if config.Extension != nil {
+			return config.Extension.RootFingerprint(), nil
+		}
 		if config.BitcoinSimple != nil {
 			return config.BitcoinSimple.KeyInfo.RootFingerprint, nil
 		}
@@ -347,6 +378,10 @@ func (configs Configurations) RootFingerprint() ([]byte, error) {
 // ContainsRootFingerprint returns true if the rootFingerprint is present in one of the configurations.
 func (configs Configurations) ContainsRootFingerprint(rootFingerprint []byte) bool {
 	for _, config := range configs {
+		if config.Extension != nil &&
+			config.Extension.ContainsRootFingerprint(rootFingerprint) {
+			return true
+		}
 		if config.BitcoinSimple != nil {
 			if bytes.Equal(config.BitcoinSimple.KeyInfo.RootFingerprint, rootFingerprint) {
 				return true
@@ -365,6 +400,9 @@ func (configs Configurations) ContainsRootFingerprint(rootFingerprint []byte) bo
 // and uses the provided script type. Returns -1 if none is found.
 func (configs Configurations) FindScriptType(scriptType ScriptType) int {
 	for idx, config := range configs {
+		if config.Extension != nil && config.Extension.ScriptType() == scriptType {
+			return idx
+		}
 		if config.BitcoinSimple != nil && config.BitcoinSimple.ScriptType == scriptType {
 			return idx
 		}

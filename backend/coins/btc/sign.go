@@ -3,14 +3,13 @@
 package btc
 
 import (
-	"encoding/binary"
+	"fmt"
 
 	"github.com/BitBoxSwiss/bitbox-wallet-app/backend/coins/btc/addresses"
 	"github.com/BitBoxSwiss/bitbox-wallet-app/backend/coins/btc/maketx"
 	coinpkg "github.com/BitBoxSwiss/bitbox-wallet-app/backend/coins/coin"
 	"github.com/BitBoxSwiss/bitbox-wallet-app/backend/signing"
 	"github.com/BitBoxSwiss/bitbox-wallet-app/util/errp"
-	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
@@ -27,10 +26,23 @@ type ProposedTransaction struct {
 	// GetKeystoreAddress returns the address from the same keystore given the address ID,
 	// or nil if not found.
 	GetKeystoreAddress func(coinpkg.Code, addresses.AddressID) (addresses.AccountAddress, error)
+	// Bip322Message, when non-nil, marks the proposed transaction as
+	// the BIP-322 to_sign virtual transaction for the given message.
+	// Hardware keystores that natively support BIP-322 (BitBox02 v9.27+)
+	// forward this to their firmware so it computes the BIP-322
+	// sighash and validates the virtual tx structure (version 0,
+	// naked-OP_RETURN output, prev_out_hash matching the to_spend
+	// txid). Software keystores ignore the field — the standard
+	// script-engine signing path already produces the correct
+	// BIP-143/341 sighash because the to_sign tx is just another
+	// input-signing problem with a known prevout script.
+	Bip322Message []byte
 }
 
 // Update populates the PSBT with all information we have about the inputs and outputs required for signing:
-//   - key information of inputs and outputs belonging to us
+//   - key information of inputs and outputs belonging to us (via
+//     AccountAddress.PSBTUpdate; each address type fills in its own
+//     script-type-specific fields)
 //   - Input UTXOs (PSBT_IN_WITNESS_UTXO)
 //   - Previous transactions (PSBT_IN_NON_WITNESS_UTXO) are *not* included here,
 //     but is currently left to the keystore to populate if needed.
@@ -40,7 +52,6 @@ func (p *ProposedTransaction) Update() error {
 	if err != nil {
 		return err
 	}
-	rootFingerprintUint32 := binary.LittleEndian.Uint32(rootFingerprint)
 	updater, err := psbt.NewUpdater(txProposal.Psbt)
 	if err != nil {
 		return err
@@ -56,37 +67,10 @@ func (p *ProposedTransaction) Update() error {
 		if err := updater.AddInWitnessUtxo(prevOut.TxOut, index); err != nil {
 			return err
 		}
-
-		scriptType := inputAddress.AccountConfiguration().ScriptType()
-		if scriptType == signing.ScriptTypeP2WPKHP2SH {
-			if err := updater.AddInRedeemScript(inputAddress.RedeemScript(), index); err != nil {
-				return err
-			}
-		}
-
-		switch scriptType {
-		case signing.ScriptTypeP2WPKHP2SH, signing.ScriptTypeP2WPKH:
-			if err := updater.AddInBip32Derivation(
-				rootFingerprintUint32,
-				inputAddress.AbsoluteKeypath().ToUInt32(),
-				inputAddress.PublicKey().SerializeCompressed(),
-				index); err != nil && err != psbt.ErrDuplicateKey {
-				// If we update the same PSBT multiple times, the key info is already present,
-				// so we can ignore the duplicate key error.
-				return err
-			}
-		case signing.ScriptTypeP2TR:
-			internalKey := schnorr.SerializePubKey(inputAddress.PublicKey())
-			txProposal.Psbt.Inputs[index].TaprootInternalKey = internalKey
-			txProposal.Psbt.Inputs[index].TaprootBip32Derivation = []*psbt.TaprootBip32Derivation{
-				{
-					XOnlyPubKey:          internalKey,
-					MasterKeyFingerprint: rootFingerprintUint32,
-					Bip32Path:            inputAddress.AbsoluteKeypath().ToUInt32(),
-				},
-			}
-		default:
-			return errp.Newf("unrecognized script type %s", scriptType)
+		if err := inputAddress.PSBTUpdate(
+			updater, index, true, rootFingerprint,
+		); err != nil {
+			return err
 		}
 	}
 
@@ -99,33 +83,11 @@ func (p *ProposedTransaction) Update() error {
 		if err != nil {
 			return errp.Newf("failed to get address: %v", err)
 		}
-
-		// Add key info to output belonging to our keystore.
 		if outputAddress != nil {
-			scriptType := outputAddress.AccountConfiguration().ScriptType()
-			switch scriptType {
-			case signing.ScriptTypeP2WPKHP2SH, signing.ScriptTypeP2WPKH:
-				if err := updater.AddOutBip32Derivation(
-					rootFingerprintUint32,
-					outputAddress.AbsoluteKeypath().ToUInt32(),
-					outputAddress.PublicKey().SerializeCompressed(),
-					index); err != nil && err != psbt.ErrDuplicateKey {
-					// If we update the same PSBT multiple times, the key info is already present,
-					// so we can ignore the duplicate key error.
-					return err
-				}
-			case signing.ScriptTypeP2TR:
-				internalKey := schnorr.SerializePubKey(outputAddress.PublicKey())
-				txProposal.Psbt.Outputs[index].TaprootInternalKey = internalKey
-				txProposal.Psbt.Outputs[index].TaprootBip32Derivation = []*psbt.TaprootBip32Derivation{
-					{
-						XOnlyPubKey:          internalKey,
-						MasterKeyFingerprint: rootFingerprintUint32,
-						Bip32Path:            outputAddress.AbsoluteKeypath().ToUInt32(),
-					},
-				}
-			default:
-				return errp.Newf("unrecognized script type %s", scriptType)
+			if err := outputAddress.PSBTUpdate(
+				updater, index, false, rootFingerprint,
+			); err != nil {
+				return err
 			}
 		}
 	}
@@ -179,7 +141,8 @@ func (account *Account) signTransaction(
 		return nil, err
 	}
 	if err := keystore.SignTransaction(proposedTransaction); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("keystore failed to sign transaction: "+
+			"%w", err)
 	}
 
 	return proposedTransaction.FinalizeAndExtract()

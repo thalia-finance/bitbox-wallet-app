@@ -155,7 +155,7 @@ func MockBtcAccount(t *testing.T, config *accounts.AccountConfig, coin *btc.Coin
 					func(addresses.AccountAddress) (bool, error) {
 						return false, nil
 					},
-					log)
+					log, nil)
 				addresses, err := addressChain.EnsureAddresses()
 				require.NoError(t, err)
 				result = append(result, accounts.AddressList{

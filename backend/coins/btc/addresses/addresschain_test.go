@@ -45,7 +45,7 @@ func (s *addressChainTestSuite) SetupTest() {
 		func(address addresses.AccountAddress) (bool, error) {
 			return s.isAddressUsed(address), nil
 		},
-		s.log)
+		s.log, nil)
 }
 
 func TestAddressChainTestSuite(t *testing.T) {

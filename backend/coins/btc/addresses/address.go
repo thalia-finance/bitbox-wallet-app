@@ -3,15 +3,19 @@
 package addresses
 
 import (
+	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/BitBoxSwiss/bitbox-wallet-app/backend/coins/btc/blockchain"
 	"github.com/BitBoxSwiss/bitbox-wallet-app/backend/coins/btc/types"
 	ourbtcutil "github.com/BitBoxSwiss/bitbox-wallet-app/backend/coins/btc/util"
 	"github.com/BitBoxSwiss/bitbox-wallet-app/backend/signing"
+	"github.com/BitBoxSwiss/bitbox-wallet-app/util/errp"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/sirupsen/logrus"
@@ -40,6 +44,27 @@ type AccountAddress interface {
 	PubkeyScript() []byte
 	PubkeyScriptHashHex() blockchain.ScriptHashHex
 	ScriptForHashToSign() (bool, []byte)
+
+	// PSBTUpdate populates this address's PSBT input or output entry
+	// with the script-type-specific fields required for downstream
+	// signing — RedeemScript / WitnessScript for nested or wrapped
+	// scripts, Bip32Derivation for ECDSA keypaths, TaprootInternalKey
+	// + TaprootBip32Derivation for taproot. The caller is responsible
+	// for setting WitnessUtxo (for inputs) before invoking PSBTUpdate.
+	//
+	// rootFingerprint is the wallet's own root fingerprint, embedded
+	// in BIP-32 derivation paths. Multi-key extensions (multisig,
+	// miniscript) may also include their cosigners' fingerprints.
+	//
+	// Duplicate-key errors from the PSBT updater are absorbed: the
+	// same PSBT may be updated multiple times during preview/sign
+	// cycles and re-adding identical key info is a no-op.
+	PSBTUpdate(
+		updater *psbt.Updater,
+		index int,
+		isInput bool,
+		rootFingerprint []byte,
+	) error
 }
 
 // accountAddress models an address that belongs to an account of the user.
@@ -62,13 +87,25 @@ type accountAddress struct {
 	log *logrus.Entry
 }
 
-// NewAccountAddress creates a new account address.
+// NewAccountAddress creates a new single-sig account address for one of
+// the standard script types (P2PKH, P2WPKH, P2WPKH-P2SH, P2TR).
+//
+// Configurations carrying a non-nil Extension (multisig, miniscript
+// policies, ...) MUST NOT be passed here — those need their own
+// address factory wired into AddressChain via NewAddressChain's
+// `addressFactory` parameter.
 func NewAccountAddress(
 	accountConfiguration *signing.Configuration,
 	derivation types.Derivation,
 	net *chaincfg.Params,
 	log *logrus.Entry,
 ) AccountAddress {
+
+	if accountConfiguration.Extension != nil {
+		log.Panic("NewAccountAddress called on a Configuration with " +
+			"a non-nil Extension. Downstream account types must " +
+			"provide their own AccountAddress factory.")
+	}
 
 	log = log.WithFields(logrus.Fields{
 		"accountConfiguration": accountConfiguration.String(),
@@ -216,4 +253,86 @@ func (address *accountAddress) ScriptForHashToSign() (bool, []byte) {
 		address.log.Panic("Unrecognized address type.")
 	}
 	panic("The end of the function cannot be reached.")
+}
+
+// PSBTUpdate implements AccountAddress.
+func (address *accountAddress) PSBTUpdate(
+	updater *psbt.Updater,
+	index int,
+	isInput bool,
+	rootFingerprint []byte,
+) error {
+
+	scriptType := address.accountConfiguration.ScriptType()
+	rootFingerprintUint32 := binary.LittleEndian.Uint32(rootFingerprint)
+	keypath := address.AbsoluteKeypath().ToUInt32()
+
+	if isInput {
+		// P2SH-wrapped segwit inputs need their redeem script in the
+		// PSBT so the script engine can finalize the witness.
+		if scriptType == signing.ScriptTypeP2WPKHP2SH {
+			if err := updater.AddInRedeemScript(
+				address.redeemScript, index,
+			); err != nil {
+				return err
+			}
+		}
+
+		switch scriptType {
+		case signing.ScriptTypeP2WPKHP2SH, signing.ScriptTypeP2WPKH:
+			err := updater.AddInBip32Derivation(
+				rootFingerprintUint32,
+				keypath,
+				address.publicKey.SerializeCompressed(),
+				index,
+			)
+			if err != nil && !errors.Is(err, psbt.ErrDuplicateKey) {
+				return err
+			}
+			return nil
+
+		case signing.ScriptTypeP2TR:
+			internalKey := schnorr.SerializePubKey(address.publicKey)
+			updater.Upsbt.Inputs[index].TaprootInternalKey = internalKey
+			updater.Upsbt.Inputs[index].TaprootBip32Derivation =
+				[]*psbt.TaprootBip32Derivation{{
+					XOnlyPubKey:          internalKey,
+					MasterKeyFingerprint: rootFingerprintUint32,
+					Bip32Path:            keypath,
+				}}
+			return nil
+
+		default:
+			return errp.Newf("unrecognized script type %s",
+				scriptType)
+		}
+	}
+
+	switch scriptType {
+	case signing.ScriptTypeP2WPKHP2SH, signing.ScriptTypeP2WPKH:
+		err := updater.AddOutBip32Derivation(
+			rootFingerprintUint32,
+			keypath,
+			address.publicKey.SerializeCompressed(),
+			index,
+		)
+		if err != nil && !errors.Is(err, psbt.ErrDuplicateKey) {
+			return err
+		}
+		return nil
+
+	case signing.ScriptTypeP2TR:
+		internalKey := schnorr.SerializePubKey(address.publicKey)
+		updater.Upsbt.Outputs[index].TaprootInternalKey = internalKey
+		updater.Upsbt.Outputs[index].TaprootBip32Derivation =
+			[]*psbt.TaprootBip32Derivation{{
+				XOnlyPubKey:          internalKey,
+				MasterKeyFingerprint: rootFingerprintUint32,
+				Bip32Path:            keypath,
+			}}
+		return nil
+
+	default:
+		return errp.Newf("unrecognized script type %s", scriptType)
+	}
 }

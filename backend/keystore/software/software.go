@@ -5,7 +5,6 @@ package software
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 
@@ -82,19 +81,7 @@ func (keystore *Keystore) Name() (string, error) {
 
 // RootFingerprint implements keystore.Keystore.
 func (keystore *Keystore) RootFingerprint() ([]byte, error) {
-	// The bip32 Go lib we use does not expose a key's fingerprint. We simply get an arbitrary child
-	// xpub and read the parentFingerprint field. This is part of the BIP32 specification.
-	keypath, err := signing.NewAbsoluteKeypath("m/84'")
-	if err != nil {
-		return nil, err
-	}
-	xprv, err := keypath.Derive(keystore.master)
-	if err != nil {
-		return nil, err
-	}
-	fingerprint := make([]byte, 4)
-	binary.BigEndian.PutUint32(fingerprint, xprv.ParentFingerprint())
-	return fingerprint, nil
+	return signing.RootFingerprint(keystore.master)
 }
 
 // Configuration implements keystore.Keystore.
@@ -217,6 +204,15 @@ func (keystore *Keystore) signBTCTransaction(btcProposedTx *btc.ProposedTransact
 			return err
 		}
 
+		masterFp, err := signing.RootFingerprint(keystore.master)
+		if err != nil {
+			return errp.WithStack(err)
+		}
+
+		keystore.log.Debugf("Deriving from keypath %v (%s), master fp %x",
+			address.AbsoluteKeypath().ToUInt32(),
+			address.AbsoluteKeypath().Encode(), masterFp)
+
 		xprv, err := address.AbsoluteKeypath().Derive(keystore.master)
 		if err != nil {
 			return err
@@ -225,6 +221,9 @@ func (keystore *Keystore) signBTCTransaction(btcProposedTx *btc.ProposedTransact
 		if err != nil {
 			return errp.WithStack(err)
 		}
+
+		keystore.log.Infof("Signing input %d with public key %x", index,
+			prv.PubKey().SerializeCompressed())
 
 		if address.AccountConfiguration().ScriptType() == signing.ScriptTypeP2TR {
 			prv = txscript.TweakTaprootPrivKey(*prv, nil)
@@ -261,12 +260,13 @@ func (keystore *Keystore) signBTCTransaction(btcProposedTx *btc.ProposedTransact
 				keystore.log.Debug("Calculated legacy signature hash")
 			}
 			signature := ecdsa.Sign(prv, signatureHash).Serialize()
-			btcProposedTx.TXProposal.Psbt.Inputs[index].PartialSigs = []*psbt.PartialSig{
-				{
+			btcProposedTx.TXProposal.Psbt.Inputs[index].PartialSigs = append(
+				btcProposedTx.TXProposal.Psbt.Inputs[index].PartialSigs,
+				&psbt.PartialSig{
 					PubKey:    prv.PubKey().SerializeCompressed(),
 					Signature: append(signature, byte(txscript.SigHashAll)),
 				},
-			}
+			)
 		}
 	}
 

@@ -62,3 +62,6 @@ require (
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// Point at the fork that has Bip322Message on PSBTSignOptions.
+replace github.com/BitBoxSwiss/bitbox02-api-go => github.com/thalia-finance/bitbox02-api-go v0.0.0-20260521105253-a59a6014eb59

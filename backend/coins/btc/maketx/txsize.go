@@ -34,7 +34,18 @@ var witnessV0Size = wire.VarIntSerializeSize(2) +
 
 // sigScriptWitnessSize returns the maximum possible sigscript/witness size for a given address type.
 // If there is no witness, 0 is returned.
+//
+// Configurations with a non-nil Extension delegate to the extension's
+// MaxSigAndWitnessSize. Standard single-sig script types are handled
+// inline.
 func sigScriptWitnessSize(configuration *signing.Configuration) (int, int) {
+	if configuration.Extension != nil {
+		sig, wit, err := configuration.Extension.MaxSigAndWitnessSize()
+		if err != nil {
+			panic(err)
+		}
+		return sig, wit
+	}
 	switch configuration.ScriptType() {
 	case signing.ScriptTypeP2PKH:
 		// OP_DATA_72
