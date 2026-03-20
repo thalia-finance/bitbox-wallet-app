@@ -21,7 +21,7 @@ type addressChainTestSuite struct {
 	xpub          *hdkeychain.ExtendedKey
 	gapLimit      int
 	change        bool
-	isAddressUsed func(*addresses.AccountAddress) bool
+	isAddressUsed func(addresses.AccountAddress) bool
 	log           *logrus.Entry
 }
 
@@ -42,7 +42,7 @@ func (s *addressChainTestSuite) SetupTest() {
 		net,
 		s.gapLimit,
 		s.change,
-		func(address *addresses.AccountAddress) (bool, error) {
+		func(address addresses.AccountAddress) (bool, error) {
 			return s.isAddressUsed(address), nil
 		},
 		s.log)
@@ -53,7 +53,7 @@ func TestAddressChainTestSuite(t *testing.T) {
 }
 
 func (s *addressChainTestSuite) TestGetUnused() {
-	s.isAddressUsed = func(*addresses.AccountAddress) bool { return false }
+	s.isAddressUsed = func(addresses.AccountAddress) bool { return false }
 	_, err := s.addresses.GetUnused()
 	s.Require().Error(err)
 	newAddresses, err := s.addresses.EnsureAddresses()
@@ -66,7 +66,7 @@ func (s *addressChainTestSuite) TestGetUnused() {
 	}
 	firstAddress := newAddresses[0]
 	// Need to call EnsureAddresses because the status of an address changed (first address is used).
-	s.isAddressUsed = func(addr *addresses.AccountAddress) bool {
+	s.isAddressUsed = func(addr addresses.AccountAddress) bool {
 		return addr == firstAddress
 	}
 	_, err = s.addresses.EnsureAddresses()
@@ -78,7 +78,7 @@ func (s *addressChainTestSuite) TestGetUnused() {
 }
 
 func (s *addressChainTestSuite) TestLookupByAddressID() {
-	s.isAddressUsed = func(*addresses.AccountAddress) bool { return false }
+	s.isAddressUsed = func(addresses.AccountAddress) bool { return false }
 	newAddresses, err := s.addresses.EnsureAddresses()
 	s.Require().NoError(err)
 	for _, address := range newAddresses {
@@ -88,7 +88,7 @@ func (s *addressChainTestSuite) TestLookupByAddressID() {
 	firstAddress := newAddresses[0]
 	// Produce addresses beyond the gapLimit to ensure the gapLimit does not confuse
 	// LookupByAddressID().
-	s.isAddressUsed = func(addr *addresses.AccountAddress) bool {
+	s.isAddressUsed = func(addr addresses.AccountAddress) bool {
 		return addr == firstAddress
 	}
 	newAddresses, err = s.addresses.EnsureAddresses()
@@ -101,7 +101,7 @@ func (s *addressChainTestSuite) TestLookupByAddressID() {
 
 func (s *addressChainTestSuite) TestEnsureAddresses() {
 	// No addresses in the beginning.
-	s.isAddressUsed = func(*addresses.AccountAddress) bool { return false }
+	s.isAddressUsed = func(addresses.AccountAddress) bool { return false }
 	_, err := s.addresses.GetUnused()
 	s.Require().Error(err)
 
@@ -131,7 +131,7 @@ func (s *addressChainTestSuite) TestEnsureAddresses() {
 	s.Require().Len(newAddresses, s.gapLimit)
 	for index, address := range newAddresses {
 		s.Require().Equal(uint32(index), address.AbsoluteKeypath().ToUInt32()[1])
-		s.Require().Equal(getPubKey(index), address.PublicKey)
+		s.Require().Equal(getPubKey(index), address.PublicKey())
 	}
 	// Address statuses are still the same, so calling it again won't produce more addresses.
 	addrs, err := s.addresses.EnsureAddresses()
@@ -139,13 +139,13 @@ func (s *addressChainTestSuite) TestEnsureAddresses() {
 	s.Require().Empty(addrs)
 
 	usedAddress := newAddresses[s.gapLimit-1]
-	s.isAddressUsed = func(addr *addresses.AccountAddress) bool {
+	s.isAddressUsed = func(addr addresses.AccountAddress) bool {
 		return addr == usedAddress
 	}
 	moreAddresses, err := s.addresses.EnsureAddresses()
 	s.Require().NoError(err)
 	s.Require().Len(moreAddresses, s.gapLimit)
-	s.Require().Equal(uint32(s.gapLimit), moreAddresses[0].Derivation.AddressIndex)
+	s.Require().Equal(uint32(s.gapLimit), moreAddresses[0].Derivation().AddressIndex)
 
 	// Repeating it does not add more the unused addresses are the same.
 	addrs, err = s.addresses.EnsureAddresses()

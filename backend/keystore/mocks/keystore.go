@@ -87,7 +87,7 @@ var _ keystore.Keystore = &KeystoreMock{}
 //			TypeFunc: func() keystore.Type {
 //				panic("mock out the Type method")
 //			},
-//			VerifyAddressBTCFunc: func(accountConfiguration *signing.Configuration, derivation btctypes.Derivation, coinMoqParam coin.Coin) error {
+//			VerifyAddressBTCFunc: func(accountConfiguration *signing.Configuration, derivation btctypes.derivation, coinMoqParam coin.Coin) error {
 //				panic("mock out the VerifyAddressBTC method")
 //			},
 //			VerifyAddressETHFunc: func(configuration *signing.Configuration, coinMoqParam coin.Coin) error {
@@ -290,9 +290,9 @@ type KeystoreMock struct {
 		}
 		// VerifyAddressBTC holds details about calls to the VerifyAddressBTC method.
 		VerifyAddressBTC []struct {
-			// AccountConfiguration is the accountConfiguration argument value.
+			// accountConfiguration is the accountConfiguration argument value.
 			AccountConfiguration *signing.Configuration
-			// Derivation is the derivation argument value.
+			// derivation is the derivation argument value.
 			Derivation btctypes.Derivation
 			// CoinMoqParam is the coinMoqParam argument value.
 			CoinMoqParam coin.Coin

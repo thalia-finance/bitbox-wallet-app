@@ -427,14 +427,14 @@ func makeTx(t *testing.T, device *Device, recipient *maketx.OutputInfo) *btc.Pro
 	}
 	prevTxHash := prevTx.TxHash()
 
-	addrs := []*addresses.AccountAddress{
+	addrs := []addresses.AccountAddress{
 		inputAddress0,
 		inputAddress1,
 		inputAddress2,
 		changeAddress,
 	}
 
-	addrsInDifferentAccount := []*addresses.AccountAddress{
+	addrsInDifferentAccount := []addresses.AccountAddress{
 		inputAddress3,
 	}
 
@@ -462,7 +462,7 @@ func makeTx(t *testing.T, device *Device, recipient *maketx.OutputInfo) *btc.Pro
 		GetPrevTx: func(chainhash.Hash) (*wire.MsgTx, error) {
 			return prevTx, nil
 		},
-		GetKeystoreAddress: func(coinCode coinpkg.Code, addressID addresses.AddressID) (*addresses.AccountAddress, error) {
+		GetKeystoreAddress: func(coinCode coinpkg.Code, addressID addresses.AddressID) (addresses.AccountAddress, error) {
 			for _, address := range addrs {
 				if address.PubkeyScriptHashHex() == addressID {
 					return address, nil

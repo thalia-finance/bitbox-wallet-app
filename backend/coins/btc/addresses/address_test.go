@@ -30,7 +30,7 @@ var net = &chaincfg.TestNet3Params
 type addressTestSuite struct {
 	suite.Suite
 
-	address *addresses.AccountAddress
+	address addresses.AccountAddress
 }
 
 func TestAddressTestSuite(t *testing.T) {
@@ -46,8 +46,8 @@ func (s *addressTestSuite) TestNewAddress() {
 		Child(0, false).
 		Child(0, false)
 	s.Require().Equal(expectedKeypath, s.address.AbsoluteKeypath())
-	s.Require().Equal("moTM88EgqzATgCjSrcNfahXaT9uCy3FHh3", s.address.EncodeAddress())
-	s.Require().True(s.address.IsForNet(net))
+	s.Require().Equal("moTM88EgqzATgCjSrcNfahXaT9uCy3FHh3", s.address.EncodeForHumans())
+	s.Require().True(s.address.Address().IsForNet(net))
 }
 
 func (s *addressTestSuite) TestPubkeyScript() {

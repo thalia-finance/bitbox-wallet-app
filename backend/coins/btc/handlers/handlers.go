@@ -364,7 +364,7 @@ func (handlers *Handlers) getUTXOs(*http.Request) (interface{}, error) {
 				TxOutput:        output.OutPoint.Index,
 				Amount:          coin.ConvertBTCAmount(handlers.account.Coin(), btcutil.Amount(output.TxOut.Value), false, accountConfig.RateUpdater),
 				Address:         address,
-				ScriptType:      output.Address.AccountConfiguration.ScriptType(),
+				ScriptType:      output.Address.AccountConfiguration().ScriptType(),
 				Note:            handlers.account.TxNote(output.OutPoint.Hash.String()),
 				AddressReused:   addressReused,
 				IsChange:        output.IsChange,

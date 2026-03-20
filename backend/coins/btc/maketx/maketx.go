@@ -40,7 +40,7 @@ type TxProposal struct {
 	// Fee is the mining fee used.
 	Fee btcutil.Amount
 	// ChangeAddress is the address of the wallet to which the change of the transaction is sent.
-	ChangeAddress   *addresses.AccountAddress
+	ChangeAddress   addresses.AccountAddress
 	PreviousOutputs PreviousOutputs
 	PaymentRequest  *paymentrequest.Request
 	// If not empty, we are sending to a silent payment recipient. The keystore needs access to this
@@ -64,7 +64,7 @@ func (txProposal *TxProposal) Total() btcutil.Amount {
 // UTXO contains the data needed of a spendable UTXO in a new tx.
 type UTXO struct {
 	TxOut   *wire.TxOut
-	Address *addresses.AccountAddress
+	Address addresses.AccountAddress
 }
 
 type byValue struct {
@@ -116,7 +116,7 @@ func toInputConfigurations(
 ) []*signing.Configuration {
 	inputConfigurations := make([]*signing.Configuration, len(selectedOutPoints))
 	for i, outPoint := range selectedOutPoints {
-		inputConfigurations[i] = spendableOutputs[outPoint].Address.AccountConfiguration
+		inputConfigurations[i] = spendableOutputs[outPoint].Address.AccountConfiguration()
 	}
 	return inputConfigurations
 }
@@ -224,7 +224,7 @@ func NewTx(
 	outputInfo *OutputInfo,
 	outputAmount int64,
 	feePerKb btcutil.Amount,
-	changeAddress *addresses.AccountAddress,
+	changeAddress addresses.AccountAddress,
 	log *logrus.Entry,
 ) (*TxProposal, error) {
 	output := wire.NewTxOut(outputAmount, outputInfo.pkScript)
@@ -270,7 +270,7 @@ func NewTx(
 		}
 		changeAmount := selectedOutputsSum - targetAmount - maxRequiredFee
 		changeIsDust := isDustAmount(
-			changeAmount, len(changePKScript), changeAddress.AccountConfiguration, feePerKb)
+			changeAmount, len(changePKScript), changeAddress.AccountConfiguration(), feePerKb)
 		finalFee := maxRequiredFee
 		if changeIsDust {
 			log.Info("change is dust")

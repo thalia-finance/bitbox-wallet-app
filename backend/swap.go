@@ -577,11 +577,11 @@ func swapDestinationAddress(account accounts.Interface) (string, *paymentrequest
 				Keypath: typedAddress.AbsoluteKeypath().ToUInt32(),
 			},
 		}, nil
-	case *btcaddresses.AccountAddress:
+	case btcaddresses.AccountAddress:
 		return typedAddress.EncodeForHumans(), &paymentrequest.Slip24AddressDerivation{
 			Btc: &paymentrequest.Slip24BtcAddressDerivation{
 				Keypath:    typedAddress.AbsoluteKeypath().ToUInt32(),
-				ScriptType: string(typedAddress.AccountConfiguration.ScriptType()),
+				ScriptType: string(typedAddress.AccountConfiguration().ScriptType()),
 			},
 		}, nil
 	default:

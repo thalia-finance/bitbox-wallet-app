@@ -50,12 +50,12 @@ func makeSig() types.Signature {
 // signatureScript returns the signature script (and witness) needed to spend from this address.
 func signatureScript(
 	t *testing.T,
-	address *addresses.AccountAddress,
+	address addresses.AccountAddress,
 	signature types.Signature,
 ) ([]byte, wire.TxWitness) {
 	t.Helper()
-	publicKey := address.PublicKey
-	switch address.AccountConfiguration.ScriptType() {
+	publicKey := address.PublicKey()
+	switch address.AccountConfiguration().ScriptType() {
 	case signing.ScriptTypeP2PKH:
 		signatureScript, err := txscript.NewScriptBuilder().
 			AddData(append(signature.SerializeDER(), byte(txscript.SigHashAll))).
@@ -65,7 +65,7 @@ func signatureScript(
 		return signatureScript, nil
 	case signing.ScriptTypeP2WPKHP2SH:
 		signatureScript, err := txscript.NewScriptBuilder().
-			AddData(address.RedeemScript).
+			AddData(address.RedeemScript()).
 			Script()
 		require.NoError(t, err)
 		txWitness := wire.TxWitness{
@@ -127,7 +127,7 @@ func testEstimateTxSize(
 				Witness:         witness,
 				Sequence:        0,
 			})
-			inputConfigurations = append(inputConfigurations, inputAddress.AccountConfiguration)
+			inputConfigurations = append(inputConfigurations, inputAddress.AccountConfiguration())
 		}
 	}
 	changePkScriptSize := 0
@@ -154,8 +154,8 @@ func TestSigScriptWitnessSize(t *testing.T) {
 	// Test all singlesig configurations.
 	for _, scriptType := range scriptTypes {
 		address := addressesTest.GetAddress(scriptType)
-		t.Run(address.AccountConfiguration.String(), func(t *testing.T) {
-			sigScriptSize, witnessSize := sigScriptWitnessSize(address.AccountConfiguration)
+		t.Run(address.AccountConfiguration().String(), func(t *testing.T) {
+			sigScriptSize, witnessSize := sigScriptWitnessSize(address.AccountConfiguration())
 			sigScript, witness := signatureScript(t, address, sig)
 			require.Equal(t, len(sigScript), sigScriptSize)
 			if witness != nil {

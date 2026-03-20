@@ -560,7 +560,7 @@ func TestSignBTCMessageSupportsChangeAddress(t *testing.T) {
 	signCalls := keystoreMock.SignBTCMessageCalls()
 	require.Len(t, signCalls, 1)
 	require.Equal(t, changeAddress.AbsoluteKeypath(), signCalls[0].Keypath)
-	require.Equal(t, changeAddress.AccountConfiguration.ScriptType(), signCalls[0].ScriptType)
+	require.Equal(t, changeAddress.AccountConfiguration().ScriptType(), signCalls[0].ScriptType)
 }
 
 func TestSignBTCMessageForAddressEdgeCases(t *testing.T) {

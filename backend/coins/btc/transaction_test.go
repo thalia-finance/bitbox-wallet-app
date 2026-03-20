@@ -9,7 +9,7 @@ import (
 
 	"github.com/BitBoxSwiss/bitbox-wallet-app/backend/accounts"
 	"github.com/BitBoxSwiss/bitbox-wallet-app/backend/accounts/errors"
-	"github.com/BitBoxSwiss/bitbox-wallet-app/backend/coins/btc/addresses"
+	addrTest "github.com/BitBoxSwiss/bitbox-wallet-app/backend/coins/btc/addresses/test"
 	"github.com/BitBoxSwiss/bitbox-wallet-app/backend/coins/btc/blockchain"
 	blockchainMocks "github.com/BitBoxSwiss/bitbox-wallet-app/backend/coins/btc/blockchain/mocks"
 	"github.com/BitBoxSwiss/bitbox-wallet-app/backend/coins/btc/maketx"
@@ -154,13 +154,7 @@ func TestGetFeePerKb(t *testing.T) {
 
 func utxo(scriptType signing.ScriptType) maketx.UTXO {
 	return maketx.UTXO{
-		Address: &addresses.AccountAddress{
-			AccountConfiguration: &signing.Configuration{
-				BitcoinSimple: &signing.BitcoinSimple{
-					ScriptType: scriptType,
-				},
-			},
-		},
+		Address: addrTest.GetAddress(scriptType),
 	}
 }
 func TestPickChangeAddressSucceeds(t *testing.T) {

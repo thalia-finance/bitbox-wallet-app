@@ -17,10 +17,10 @@ type AddressChain struct {
 	net                  *chaincfg.Params
 	gapLimit             int
 	change               bool
-	addresses            []*AccountAddress
-	addressesByID        map[AddressID]*AccountAddress
+	addresses            []AccountAddress
+	addressesByID        map[AddressID]AccountAddress
 	addressesLock        locker.Locker
-	isAddressUsed        func(*AccountAddress) (bool, error)
+	isAddressUsed        func(AccountAddress) (bool, error)
 	log                  *logrus.Entry
 }
 
@@ -30,7 +30,7 @@ func NewAddressChain(
 	net *chaincfg.Params,
 	gapLimit int,
 	change bool,
-	isAddressUsed func(*AccountAddress) (bool, error),
+	isAddressUsed func(AccountAddress) (bool, error),
 	log *logrus.Entry,
 ) *AddressChain {
 	return &AddressChain{
@@ -38,8 +38,8 @@ func NewAddressChain(
 		net:                  net,
 		gapLimit:             gapLimit,
 		change:               change,
-		addresses:            []*AccountAddress{},
-		addressesByID:        map[AddressID]*AccountAddress{},
+		addresses:            []AccountAddress{},
+		addressesByID:        map[AddressID]AccountAddress{},
 		isAddressUsed:        isAddressUsed,
 		log: log.WithFields(logrus.Fields{"group": "addresses", "net": net.Name,
 			"gap-limit": gapLimit, "change": change,
@@ -49,7 +49,7 @@ func NewAddressChain(
 
 // GetUnused returns the last `gapLimit` unused addresses. EnsureAddresses() must be called
 // beforehand.
-func (addresses *AddressChain) GetUnused() ([]*AccountAddress, error) {
+func (addresses *AddressChain) GetUnused() ([]AccountAddress, error) {
 	defer addresses.addressesLock.RLock()()
 	unusedTailCount, err := addresses.unusedTailCount()
 	if err != nil {
@@ -62,7 +62,7 @@ func (addresses *AddressChain) GetUnused() ([]*AccountAddress, error) {
 }
 
 // addAddress appends a new address at the end of the chain.
-func (addresses *AddressChain) addAddress() *AccountAddress {
+func (addresses *AddressChain) addAddress() AccountAddress {
 	addresses.log.Debug("Add new address to chain")
 	index := uint32(len(addresses.addresses))
 	address := NewAccountAddress(
@@ -95,16 +95,16 @@ func (addresses *AddressChain) unusedTailCount() (int, error) {
 
 // LookupByAddressID returns the address which matches the provided address ID. Returns nil
 // if not found.
-func (addresses *AddressChain) LookupByAddressID(addressID AddressID) *AccountAddress {
+func (addresses *AddressChain) LookupByAddressID(addressID AddressID) AccountAddress {
 	defer addresses.addressesLock.RLock()()
 	return addresses.addressesByID[addressID]
 }
 
 // EnsureAddresses appends addresses to the address chain until there are `gapLimit` unused
 // ones, and returns the new addresses.
-func (addresses *AddressChain) EnsureAddresses() ([]*AccountAddress, error) {
+func (addresses *AddressChain) EnsureAddresses() ([]AccountAddress, error) {
 	defer addresses.addressesLock.Lock()()
-	addedAddresses := []*AccountAddress{}
+	addedAddresses := []AccountAddress{}
 	unusedAddressCount, err := addresses.unusedTailCount()
 	if err != nil {
 		return nil, err

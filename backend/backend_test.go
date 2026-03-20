@@ -152,7 +152,7 @@ func MockBtcAccount(t *testing.T, config *accounts.AccountConfig, coin *btc.Coin
 				addressChain := addresses.NewAddressChain(
 					signingConfig,
 					coin.Net(), 20, false,
-					func(*addresses.AccountAddress) (bool, error) {
+					func(addresses.AccountAddress) (bool, error) {
 						return false, nil
 					},
 					log)
@@ -272,7 +272,7 @@ func newBackend(t *testing.T, testing, regtest bool) *Backend {
 	}
 	b.ratesUpdater.SetCoingeckoURL("unused") // avoid hitting real API
 
-	b.makeBtcAccount = func(config *accounts.AccountConfig, coin *btc.Coin, gapLimits *types.GapLimits, getAddress func(coinpkg.Code, blockchain.ScriptHashHex) (*addresses.AccountAddress, error), log *logrus.Entry) (accounts.Interface, error) {
+	b.makeBtcAccount = func(config *accounts.AccountConfig, coin *btc.Coin, gapLimits *types.GapLimits, getAddress func(coinpkg.Code, blockchain.ScriptHashHex) (addresses.AccountAddress, error), log *logrus.Entry) (accounts.Interface, error) {
 		return MockBtcAccount(t, config, coin, gapLimits, log), nil
 	}
 	b.makeEthAccount = func(config *accounts.AccountConfig, coin *eth.Coin, httpClient *http.Client, log *logrus.Entry) accounts.Interface {

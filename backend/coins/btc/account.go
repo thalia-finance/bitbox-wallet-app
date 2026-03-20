@@ -145,7 +145,7 @@ type Account struct {
 	httpClient *http.Client
 
 	// getAddressFromSameKeystore retrieves an address from any account on the same keystore as this one.
-	getAddressFromSameKeystore func(coin.Code, addresses.AddressID) (*addresses.AccountAddress, error)
+	getAddressFromSameKeystore func(coin.Code, addresses.AddressID) (addresses.AccountAddress, error)
 }
 
 // NewAccount creates a new account.
@@ -157,7 +157,7 @@ func NewAccount(
 	config *accounts.AccountConfig,
 	coin *Coin,
 	forceGapLimits *types.GapLimits,
-	getAddressFromSameKeystore func(coin.Code, addresses.AddressID) (*addresses.AccountAddress, error),
+	getAddressFromSameKeystore func(coin.Code, addresses.AddressID) (addresses.AccountAddress, error),
 	log *logrus.Entry,
 	httpClient *http.Client,
 	db transactions.DBInterface,
@@ -615,13 +615,13 @@ func (account *Account) incAndEmitSyncCounter() {
 	}
 }
 
-func (account *Account) getAddressHistory(address *addresses.AccountAddress) (blockchain.TxHistory, error) {
+func (account *Account) getAddressHistory(address addresses.AccountAddress) (blockchain.TxHistory, error) {
 	return transactions.DBView(account.db, func(dbTx transactions.DBTxInterface) (blockchain.TxHistory, error) {
 		return dbTx.AddressHistory(address.PubkeyScriptHashHex())
 	})
 }
 
-func (account *Account) isAddressUsed(address *addresses.AccountAddress) (bool, error) {
+func (account *Account) isAddressUsed(address addresses.AccountAddress) (bool, error) {
 	history, err := account.getAddressHistory(address)
 	if err != nil {
 		return false, err
@@ -649,7 +649,7 @@ func (account *Account) reportFatalSyncError(err error, msg string) {
 // onAddressStatus is called when the status (tx history) of an address might have changed. It is
 // called when the address is initialized, and when the backend notifies us of changes to it. If
 // there was indeed change, the tx history is downloaded and processed.
-func (account *Account) onAddressStatus(address *addresses.AccountAddress, status string) {
+func (account *Account) onAddressStatus(address addresses.AccountAddress, status string) {
 	if account.isClosed() {
 		account.log.Debug("Ignoring result of ScriptHashSubscribe after the account was closed")
 		return
@@ -716,7 +716,7 @@ func (account *Account) ensureAddresses() {
 	}
 }
 
-func (account *Account) subscribeAddress(address *addresses.AccountAddress) {
+func (account *Account) subscribeAddress(address addresses.AccountAddress) {
 	account.coin.Blockchain().ScriptHashSubscribe(
 		account.Synchronizer.IncRequestsCounter,
 		address.PubkeyScriptHashHex(),
@@ -800,7 +800,7 @@ func (account *Account) canSignMessageForUsedAddress(scriptType signing.ScriptTy
 
 func (account *Account) lookupAddressByID(
 	addressID addresses.AddressID,
-) (*addresses.AccountAddress, UsedAddressType) {
+) (addresses.AccountAddress, UsedAddressType) {
 	for _, subacc := range account.subaccounts {
 		if addr := subacc.receiveAddresses.LookupByAddressID(addressID); addr != nil {
 			return addr, UsedAddressTypeReceive
@@ -858,7 +858,7 @@ func (account *Account) GetUsedAddresses() ([]UsedAddress, error) {
 							Address:     addr.EncodeForHumans(),
 							AddressID:   addr.ID(),
 							AddressType: addressType,
-							CanSignMsg:  account.canSignMessageForUsedAddress(addr.AccountConfiguration.ScriptType()),
+							CanSignMsg:  account.canSignMessageForUsedAddress(addr.AccountConfiguration().ScriptType()),
 						},
 					}
 				}
@@ -938,8 +938,8 @@ func (account *Account) VerifyAddress(addressID string) (bool, error) {
 	}
 	if canVerifyAddress {
 		return true, keystore.VerifyAddressBTC(
-			address.AccountConfiguration,
-			address.Derivation,
+			address.AccountConfiguration(),
+			address.Derivation(),
 			account.Coin())
 	}
 	return false, nil
@@ -1008,7 +1008,7 @@ func sortByAddresses(result []*SpendableOutput) []*SpendableOutput {
 type SpendableOutput struct {
 	*transactions.SpendableOutput
 	OutPoint wire.OutPoint
-	Address  *addresses.AccountAddress
+	Address  addresses.AccountAddress
 	IsChange bool
 }
 
@@ -1251,6 +1251,6 @@ func (account *Account) SignBTCMessageForAddress(addressID string, message strin
 		account,
 		message,
 		address,
-		address.AccountConfiguration.ScriptType(),
+		address.AccountConfiguration().ScriptType(),
 	)
 }

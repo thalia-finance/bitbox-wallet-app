@@ -74,7 +74,7 @@ func (account *Account) getFeePerKb(args *accounts.TxProposalArgs) (btcutil.Amou
 // with Taproot changes. This ensures that also users who received on Taproot and broke their
 // watch-only tools can fix it by moving the coins back to P2WPKH, and not have them go a Taproot
 // change again by accident.
-func (account *Account) pickChangeAddress(utxos map[wire.OutPoint]maketx.UTXO) (*addresses.AccountAddress, error) {
+func (account *Account) pickChangeAddress(utxos map[wire.OutPoint]maketx.UTXO) (addresses.AccountAddress, error) {
 	if len(account.subaccounts) == 0 {
 		return nil, errp.New("Account has no subaccounts")
 	}
@@ -90,7 +90,7 @@ func (account *Account) pickChangeAddress(utxos map[wire.OutPoint]maketx.UTXO) (
 	if p2trIndex >= 0 {
 		// Check if there is at least one taproot UTXO.
 		for _, utxo := range utxos {
-			if utxo.Address.AccountConfiguration.ScriptType() == signing.ScriptTypeP2TR {
+			if utxo.Address.AccountConfiguration().ScriptType() == signing.ScriptTypeP2TR {
 				// Found a taproot UTXO.
 				unusedAddresses, err := account.subaccounts[p2trIndex].changeAddresses.GetUnused()
 				if err != nil {
@@ -197,7 +197,7 @@ func (account *Account) newTx(args *accounts.TxProposalArgs) (
 		if err != nil {
 			return nil, nil, err
 		}
-		account.log.Infof("Change address script type: %s", changeAddress.AccountConfiguration.ScriptType())
+		account.log.Infof("Change address script type: %s", changeAddress.AccountConfiguration().ScriptType())
 		txProposal, err = maketx.NewTx(
 			account.coin,
 			wireUTXO,
@@ -223,7 +223,7 @@ func (account *Account) newTx(args *accounts.TxProposalArgs) (
 
 // AddressByID returns the address in the account with the given address ID. Returns nil if the
 // address does not exist in the account.
-func (account *Account) AddressByID(addressID addresses.AddressID) *addresses.AccountAddress {
+func (account *Account) AddressByID(addressID addresses.AddressID) addresses.AccountAddress {
 	address, _ := account.lookupAddressByID(addressID)
 	return address
 }

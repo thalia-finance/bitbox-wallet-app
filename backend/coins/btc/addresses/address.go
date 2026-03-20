@@ -27,19 +27,37 @@ func NewAddressID(pubkeyScript []byte) AddressID {
 }
 
 // AccountAddress models an address that belongs to an account of the user.
-// It contains all the information needed to receive and spend funds.
-type AccountAddress struct {
-	btcutil.Address
+type AccountAddress interface {
+	ID() string
+	String() string
+	EncodeForHumans() string
+	AccountConfiguration() *signing.Configuration
+	Address() btcutil.Address
+	Derivation() types.Derivation
+	AbsoluteKeypath() signing.AbsoluteKeypath
+	PublicKey() *btcec.PublicKey
+	RedeemScript() []byte
+	PubkeyScript() []byte
+	PubkeyScriptHashHex() blockchain.ScriptHashHex
+	ScriptForHashToSign() (bool, []byte)
+}
 
-	// AccountConfiguration is the account level configuration from which this address was derived.
-	AccountConfiguration *signing.Configuration
-	// PublicKey is the public key of a single-sig address.
-	PublicKey  *btcec.PublicKey
-	Derivation types.Derivation
+// accountAddress models an address that belongs to an account of the user.
+// It contains all the information needed to receive and spend funds.
+type accountAddress struct {
+	nativeAddress btcutil.Address
+
+	// accountConfiguration is the account level configuration from which this address was derived.
+	accountConfiguration *signing.Configuration
+
+	// publicKey is the public key of a single-sig address.
+	publicKey *btcec.PublicKey
+
+	derivation types.Derivation
 
 	// redeemScript stores the redeem script of a BIP16 P2SH output or nil if address type is not
 	// P2SH.
-	RedeemScript []byte
+	redeemScript []byte
 
 	log *logrus.Entry
 }
@@ -50,7 +68,7 @@ func NewAccountAddress(
 	derivation types.Derivation,
 	net *chaincfg.Params,
 	log *logrus.Entry,
-) *AccountAddress {
+) AccountAddress {
 
 	log = log.WithFields(logrus.Fields{
 		"accountConfiguration": accountConfiguration.String(),
@@ -109,12 +127,12 @@ func NewAccountAddress(
 		log.Panic(fmt.Sprintf("Unrecognized script type: %s", accountConfiguration.ScriptType()))
 	}
 
-	return &AccountAddress{
-		Address:              address,
-		AccountConfiguration: accountConfiguration,
-		PublicKey:            publicKey,
-		Derivation:           derivation,
-		RedeemScript:         redeemScript,
+	return &accountAddress{
+		nativeAddress:        address,
+		accountConfiguration: accountConfiguration,
+		publicKey:            publicKey,
+		derivation:           derivation,
+		redeemScript:         redeemScript,
 		log:                  log,
 	}
 }
@@ -122,25 +140,55 @@ func NewAccountAddress(
 // ID implements accounts.Address.
 // For BTC/LTC, this value must never change because it is treated interchangeably with the
 // address scriptHashHex.
-func (address *AccountAddress) ID() string {
+func (address *accountAddress) ID() string {
 	return string(address.PubkeyScriptHashHex())
 }
 
+// String returns a representation of the address for logging.
+func (address *accountAddress) String() string {
+	return address.EncodeForHumans()
+}
+
 // EncodeForHumans implements accounts.Address.
-func (address *AccountAddress) EncodeForHumans() string {
-	return address.EncodeAddress()
+func (address *accountAddress) EncodeForHumans() string {
+	return address.nativeAddress.EncodeAddress()
+}
+
+// AccountConfiguration returns the account's configuration.
+func (address *accountAddress) AccountConfiguration() *signing.Configuration {
+	return address.accountConfiguration
+}
+
+// Address returns the underlying native address.
+func (address *accountAddress) Address() btcutil.Address {
+	return address.nativeAddress
+}
+
+// Derivation returns the derivation information of this address.
+func (address *accountAddress) Derivation() types.Derivation {
+	return address.derivation
 }
 
 // AbsoluteKeypath implements accounts.Address.
-func (address *AccountAddress) AbsoluteKeypath() signing.AbsoluteKeypath {
-	return address.AccountConfiguration.AbsoluteKeypath().
-		Child(address.Derivation.SimpleChainIndex(), false).
-		Child(address.Derivation.AddressIndex, false)
+func (address *accountAddress) AbsoluteKeypath() signing.AbsoluteKeypath {
+	return address.accountConfiguration.AbsoluteKeypath().
+		Child(address.derivation.SimpleChainIndex(), false).
+		Child(address.derivation.AddressIndex, false)
+}
+
+// PublicKey returns the public key of this address.
+func (address *accountAddress) PublicKey() *btcec.PublicKey {
+	return address.publicKey
+}
+
+// RedeemScript returns the redeem script of this address.
+func (address *accountAddress) RedeemScript() []byte {
+	return address.redeemScript
 }
 
 // PubkeyScript returns the pubkey script of this address. Use this in a tx output to receive funds.
-func (address *AccountAddress) PubkeyScript() []byte {
-	script, err := ourbtcutil.PkScriptFromAddress(address.Address)
+func (address *accountAddress) PubkeyScript() []byte {
+	script, err := ourbtcutil.PkScriptFromAddress(address.nativeAddress)
 	if err != nil {
 		address.log.WithError(err).Panic("Failed to get the pubkey script for an address.")
 	}
@@ -149,19 +197,19 @@ func (address *AccountAddress) PubkeyScript() []byte {
 
 // PubkeyScriptHashHex returns the hash of the pubkey script in hex format.
 // It is used to subscribe to notifications at the ElectrumX server.
-func (address *AccountAddress) PubkeyScriptHashHex() blockchain.ScriptHashHex {
+func (address *accountAddress) PubkeyScriptHashHex() blockchain.ScriptHashHex {
 	return blockchain.NewScriptHashHex(address.PubkeyScript())
 }
 
 // ScriptForHashToSign returns whether this address is a segwit output and the script used when
 // calculating the hash to be signed in a transaction. This info is needed when trying to spend
 // from this address.
-func (address *AccountAddress) ScriptForHashToSign() (bool, []byte) {
-	switch address.AccountConfiguration.ScriptType() {
+func (address *accountAddress) ScriptForHashToSign() (bool, []byte) {
+	switch address.accountConfiguration.ScriptType() {
 	case signing.ScriptTypeP2PKH:
 		return false, address.PubkeyScript()
 	case signing.ScriptTypeP2WPKHP2SH:
-		return true, address.RedeemScript
+		return true, address.redeemScript
 	case signing.ScriptTypeP2WPKH:
 		return true, address.PubkeyScript()
 	default:

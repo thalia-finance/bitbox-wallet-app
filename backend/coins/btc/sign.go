@@ -26,7 +26,7 @@ type ProposedTransaction struct {
 	FormatUnit                   coinpkg.BtcUnit
 	// GetKeystoreAddress returns the address from the same keystore given the address ID,
 	// or nil if not found.
-	GetKeystoreAddress func(coinpkg.Code, addresses.AddressID) (*addresses.AccountAddress, error)
+	GetKeystoreAddress func(coinpkg.Code, addresses.AddressID) (addresses.AccountAddress, error)
 }
 
 // Update populates the PSBT with all information we have about the inputs and outputs required for signing:
@@ -57,9 +57,9 @@ func (p *ProposedTransaction) Update() error {
 			return err
 		}
 
-		scriptType := inputAddress.AccountConfiguration.ScriptType()
+		scriptType := inputAddress.AccountConfiguration().ScriptType()
 		if scriptType == signing.ScriptTypeP2WPKHP2SH {
-			if err := updater.AddInRedeemScript(inputAddress.RedeemScript, index); err != nil {
+			if err := updater.AddInRedeemScript(inputAddress.RedeemScript(), index); err != nil {
 				return err
 			}
 		}
@@ -69,14 +69,14 @@ func (p *ProposedTransaction) Update() error {
 			if err := updater.AddInBip32Derivation(
 				rootFingerprintUint32,
 				inputAddress.AbsoluteKeypath().ToUInt32(),
-				inputAddress.PublicKey.SerializeCompressed(),
+				inputAddress.PublicKey().SerializeCompressed(),
 				index); err != nil && err != psbt.ErrDuplicateKey {
 				// If we update the same PSBT multiple times, the key info is already present,
 				// so we can ignore the duplicate key error.
 				return err
 			}
 		case signing.ScriptTypeP2TR:
-			internalKey := schnorr.SerializePubKey(inputAddress.PublicKey)
+			internalKey := schnorr.SerializePubKey(inputAddress.PublicKey())
 			txProposal.Psbt.Inputs[index].TaprootInternalKey = internalKey
 			txProposal.Psbt.Inputs[index].TaprootBip32Derivation = []*psbt.TaprootBip32Derivation{
 				{
@@ -102,20 +102,20 @@ func (p *ProposedTransaction) Update() error {
 
 		// Add key info to output belonging to our keystore.
 		if outputAddress != nil {
-			scriptType := outputAddress.AccountConfiguration.ScriptType()
+			scriptType := outputAddress.AccountConfiguration().ScriptType()
 			switch scriptType {
 			case signing.ScriptTypeP2WPKHP2SH, signing.ScriptTypeP2WPKH:
 				if err := updater.AddOutBip32Derivation(
 					rootFingerprintUint32,
 					outputAddress.AbsoluteKeypath().ToUInt32(),
-					outputAddress.PublicKey.SerializeCompressed(),
+					outputAddress.PublicKey().SerializeCompressed(),
 					index); err != nil && err != psbt.ErrDuplicateKey {
 					// If we update the same PSBT multiple times, the key info is already present,
 					// so we can ignore the duplicate key error.
 					return err
 				}
 			case signing.ScriptTypeP2TR:
-				internalKey := schnorr.SerializePubKey(outputAddress.PublicKey)
+				internalKey := schnorr.SerializePubKey(outputAddress.PublicKey())
 				txProposal.Psbt.Outputs[index].TaprootInternalKey = internalKey
 				txProposal.Psbt.Outputs[index].TaprootBip32Derivation = []*psbt.TaprootBip32Derivation{
 					{

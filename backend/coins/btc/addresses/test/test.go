@@ -21,7 +21,7 @@ var (
 
 // NewAddressChain returns an AddressChain for convenience in testing.
 func NewAddressChain(
-	isAddressUsed func(*addresses.AccountAddress) (bool, error)) (*signing.Configuration, *addresses.AddressChain) {
+	isAddressUsed func(addresses.AccountAddress) (bool, error)) (*signing.Configuration, *addresses.AddressChain) {
 	log := logging.Get().WithGroup("addresses_test")
 	xprv, err := hdkeychain.NewMaster(make([]byte, hdkeychain.RecommendedSeedLen), net)
 	if err != nil {
@@ -41,7 +41,7 @@ func NewAddressChain(
 }
 
 // GetAddress returns a dummy address for a given address type.
-func GetAddress(scriptType signing.ScriptType) *addresses.AccountAddress {
+func GetAddress(scriptType signing.ScriptType) addresses.AccountAddress {
 	extendedPublicKey, err := hdkeychain.NewKeyFromString(xpub)
 	if err != nil {
 		panic(err)

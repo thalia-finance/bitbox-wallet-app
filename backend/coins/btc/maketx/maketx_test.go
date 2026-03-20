@@ -53,9 +53,9 @@ type newTxSuite struct {
 	coin coin.Coin
 
 	addressChain       *addresses.AddressChain
-	someAddresses      []*addresses.AccountAddress
+	someAddresses      []addresses.AccountAddress
 	inputConfiguration *signing.Configuration
-	changeAddress      *addresses.AccountAddress
+	changeAddress      addresses.AccountAddress
 	outputPkScript     []byte
 
 	log *logrus.Entry
@@ -64,7 +64,7 @@ type newTxSuite struct {
 func (s *newTxSuite) SetupTest() {
 	s.log = logging.Get().WithGroup("newTxTest")
 	s.inputConfiguration, s.addressChain = addressesTest.NewAddressChain(
-		func(address *addresses.AccountAddress) (bool, error) {
+		func(address addresses.AccountAddress) (bool, error) {
 			return false, nil
 		},
 	)

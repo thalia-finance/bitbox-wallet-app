@@ -98,7 +98,7 @@ func (s *transactionsSuite) SetupTest() {
 	s.log = logging.Get().WithGroup("transactions_test")
 
 	_, s.addressChain = addressesTest.NewAddressChain(
-		func(address *addresses.AccountAddress) (bool, error) {
+		func(address addresses.AccountAddress) (bool, error) {
 			return false, nil
 		},
 	)
@@ -129,7 +129,7 @@ func TestTransactionsSuite(t *testing.T) {
 }
 
 func (s *transactionsSuite) updateAddressHistory(
-	address *addresses.AccountAddress, txs []*blockchainpkg.TxInfo) {
+	address addresses.AccountAddress, txs []*blockchainpkg.TxInfo) {
 	for _, tx := range txs {
 		s.notifierMock.On("Put", tx.TXHash[:]).Return(nil).Once()
 	}
@@ -140,7 +140,7 @@ func (s *transactionsSuite) updateAddressHistory(
 func newTx(
 	fromTxHash chainhash.Hash,
 	fromTxIndex uint32,
-	toAddress *addresses.AccountAddress,
+	toAddress addresses.AccountAddress,
 	amount btcutil.Amount) *wire.MsgTx {
 	return &wire.MsgTx{
 		Version: wire.TxVersion,
