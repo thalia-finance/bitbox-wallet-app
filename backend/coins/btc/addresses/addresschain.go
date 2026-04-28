@@ -153,13 +153,32 @@ func (addresses *AddressChain) LookupByAddressID(addressID AddressID) AccountAdd
 
 // EnsureAddresses appends addresses to the address chain until there are `gapLimit` unused
 // ones, and returns the new addresses.
+//
+// We deliberately do NOT hold `addressesLock` across the
+// `unusedTailCount` call: it invokes `isAddressUsed` which calls
+// into the embedder's DB layer, and the upstream
+// `Transactions.Transactions(IsChange)` path opens a DB read tx and
+// then takes `addressesLock.RLock` from inside its callback. Holding
+// the writer lock across the DB call therefore creates an AB-BA
+// cycle: addressesLock(W) waiting on DB ↔ DB tx waiting on
+// addressesLock(R). We instead read the unused count under the read
+// lock, then re-acquire the write lock to mutate. The chain only
+// grows, so an outdated `unusedAddressCount` results in adding
+// strictly more addresses than required — never fewer — which is
+// safe (and converges on the next caller's iteration).
 func (addresses *AddressChain) EnsureAddresses() ([]AccountAddress, error) {
-	defer addresses.addressesLock.Lock()()
-	addedAddresses := []AccountAddress{}
-	unusedAddressCount, err := addresses.unusedTailCount()
+	var unusedAddressCount int
+	var err error
+	func() {
+		defer addresses.addressesLock.RLock()()
+		unusedAddressCount, err = addresses.unusedTailCount()
+	}()
 	if err != nil {
 		return nil, err
 	}
+
+	defer addresses.addressesLock.Lock()()
+	addedAddresses := []AccountAddress{}
 	for i := 0; i < addresses.gapLimit-unusedAddressCount; i++ {
 		addedAddresses = append(addedAddresses, addresses.addAddress())
 	}

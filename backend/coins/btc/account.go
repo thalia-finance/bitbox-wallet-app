@@ -140,6 +140,16 @@ type Account struct {
 
 	closed bool
 
+	// subscriptionsWG tracks goroutines spawned from ScriptHashSubscribe
+	// callbacks (see subscribeAddress). Close() blocks on Wait() before
+	// tearing down dependent resources (transactions, db) so an in-flight
+	// onAddressStatus call can't reach a closed blockchain client and
+	// panic out of getTransactionCached. subscriptionMu serialises Add
+	// against Wait by gating the spawn decision on subscriptionsClosed.
+	subscriptionMu      sync.Mutex
+	subscriptionsClosed bool
+	subscriptionsWG     sync.WaitGroup
+
 	log *logrus.Entry
 
 	httpClient *http.Client
@@ -444,12 +454,34 @@ func (account *Account) FatalError() bool {
 
 // Close stops the account.
 func (account *Account) Close() {
-	defer account.initializedLock.Lock()()
+	unlock := account.initializedLock.Lock()
 	if account.closed {
 		account.log.Debug("account aleady closed")
+		unlock()
 		return
 	}
+	// Mark closed early so concurrent isClosed() readers (notably the
+	// in-flight onAddressStatus goroutines we're about to drain) observe
+	// the new state and bail out via their existing isClosed() guards.
+	account.closed = true
 	account.BaseAccount.Close()
+
+	// Stop accepting new ScriptHashSubscribe callbacks. Together with the
+	// drain below, this prevents an onAddressStatus call from landing
+	// inside getTransactionCached after the blockchain client is gone and
+	// panicking out of the host process.
+	account.subscriptionMu.Lock()
+	account.subscriptionsClosed = true
+	account.subscriptionMu.Unlock()
+
+	// Release initializedLock before draining: an in-flight
+	// onAddressStatus goroutine acquires initializedLock.RLock() via
+	// isClosed() between its blockchain calls. Holding the write lock
+	// across Wait would deadlock against that read lock.
+	unlock()
+
+	account.subscriptionsWG.Wait()
+
 	account.log.Info("Closed account")
 	// TODO: deregister from json RPC client. The client can be closed when no account uses
 	// the client any longer.
@@ -470,7 +502,6 @@ func (account *Account) Close() {
 		Action:  action.Reload,
 		Object:  nil,
 	})
-	account.closed = true
 }
 
 func (account *Account) isClosed() bool {
@@ -725,7 +756,18 @@ func (account *Account) subscribeAddress(address addresses.AccountAddress) {
 		account.Synchronizer.IncRequestsCounter,
 		address.PubkeyScriptHashHex(),
 		func(status string) {
-			go account.onAddressStatus(address, status)
+			account.subscriptionMu.Lock()
+			if account.subscriptionsClosed {
+				account.subscriptionMu.Unlock()
+				return
+			}
+			account.subscriptionsWG.Add(1)
+			account.subscriptionMu.Unlock()
+
+			go func() {
+				defer account.subscriptionsWG.Done()
+				account.onAddressStatus(address, status)
+			}()
 		},
 	)
 }

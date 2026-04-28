@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"math/big"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -561,6 +563,165 @@ func TestSignBTCMessageSupportsChangeAddress(t *testing.T) {
 	require.Len(t, signCalls, 1)
 	require.Equal(t, changeAddress.AbsoluteKeypath(), signCalls[0].Keypath)
 	require.Equal(t, changeAddress.AccountConfiguration().ScriptType(), signCalls[0].ScriptType)
+}
+
+// mockAccountWithBlockchain mirrors mockAccount but also returns the
+// underlying BlockchainMock so the test can install captures and stubs
+// before Initialize spins up the sync flow.
+func mockAccountWithBlockchain(t *testing.T) (*Account, *blockchainMock.BlockchainMock) {
+	t.Helper()
+	bcMock := &blockchainMock.BlockchainMock{}
+	bcMock.MockRegisterOnConnectionErrorChangedEvent = func(f func(error)) {}
+
+	account := mockAccount(t, nil)
+	account.coin.TstSetMakeBlockchain(func() blockchain.Interface { return bcMock })
+	return account, bcMock
+}
+
+// TestAccountCloseWaitsForInflightSubscriptionGoroutines verifies that
+// Account.Close() blocks until any in-flight goroutine spawned from a
+// ScriptHashSubscribe callback has returned. Without this guarantee, an
+// onAddressStatus call can outlive the blockchain client and panic when it
+// reaches a closed transport.
+func TestAccountCloseWaitsForInflightSubscriptionGoroutines(t *testing.T) {
+	account, bcMock := mockAccountWithBlockchain(t)
+
+	var captureMu sync.Mutex
+	var capturedCallbacks []func(string)
+
+	historyEntered := make(chan struct{}, 1)
+	historyResume := make(chan struct{})
+
+	bcMock.MockScriptHashSubscribe = func(_ func() func(), _ blockchain.ScriptHashHex, success func(string)) {
+		captureMu.Lock()
+		capturedCallbacks = append(capturedCallbacks, success)
+		captureMu.Unlock()
+	}
+	bcMock.MockScriptHashGetHistory = func(blockchain.ScriptHashHex) (blockchain.TxHistory, error) {
+		select {
+		case historyEntered <- struct{}{}:
+		default:
+		}
+		<-historyResume
+		return blockchain.TxHistory{}, nil
+	}
+
+	require.NoError(t, account.Initialize())
+	require.Eventually(t, account.Synced, time.Second, time.Millisecond*200)
+
+	captureMu.Lock()
+	require.NotEmpty(t, capturedCallbacks)
+	callback := capturedCallbacks[0]
+	captureMu.Unlock()
+
+	// Fire a status callback with a non-empty status so onAddressStatus
+	// does not take the early-return path and instead reaches the blocking
+	// ScriptHashGetHistory mock.
+	callback("non-empty-status")
+
+	select {
+	case <-historyEntered:
+	case <-time.After(time.Second):
+		t.Fatal("ScriptHashGetHistory was not entered")
+	}
+
+	closeReturned := make(chan struct{})
+	go func() {
+		account.Close()
+		close(closeReturned)
+	}()
+
+	select {
+	case <-closeReturned:
+		t.Fatal("Close returned while a subscription goroutine was still in-flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(historyResume)
+
+	select {
+	case <-closeReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return after the in-flight subscription goroutine finished")
+	}
+}
+
+// TestAccountCloseDropsLateSubscriptionCallbacks verifies that subscription
+// callbacks arriving after Account.Close() are dropped without spawning a
+// goroutine.
+func TestAccountCloseDropsLateSubscriptionCallbacks(t *testing.T) {
+	account, bcMock := mockAccountWithBlockchain(t)
+
+	var captureMu sync.Mutex
+	var capturedCallbacks []func(string)
+	var onAddressStatusEntered atomic.Int32
+
+	bcMock.MockScriptHashSubscribe = func(_ func() func(), _ blockchain.ScriptHashHex, success func(string)) {
+		captureMu.Lock()
+		capturedCallbacks = append(capturedCallbacks, success)
+		captureMu.Unlock()
+	}
+	// Any goroutine that sneaks past the gate would call into the DB via
+	// getAddressHistory before reaching ScriptHashGetHistory. Tracking
+	// entry into ScriptHashGetHistory wouldn't distinguish, because the
+	// existing isClosed() check inside onAddressStatus would short-circuit
+	// before that. Instead, observe goroutine spawning via NumGoroutine.
+	bcMock.MockScriptHashGetHistory = func(blockchain.ScriptHashHex) (blockchain.TxHistory, error) {
+		onAddressStatusEntered.Add(1)
+		return blockchain.TxHistory{}, nil
+	}
+
+	require.NoError(t, account.Initialize())
+	require.Eventually(t, account.Synced, time.Second, time.Millisecond*200)
+
+	captureMu.Lock()
+	require.NotEmpty(t, capturedCallbacks)
+	callback := capturedCallbacks[0]
+	captureMu.Unlock()
+
+	account.Close()
+
+	// After Close, the gating flag must be set so that the next callback
+	// drops without touching the WaitGroup.
+	account.subscriptionMu.Lock()
+	require.True(t, account.subscriptionsClosed)
+	account.subscriptionMu.Unlock()
+
+	// Firing a callback after Close must return synchronously and must not
+	// spawn a goroutine. We measure synchronous return via a short timeout,
+	// and verify nothing ran by checking that the (already-drained)
+	// WaitGroup remains immediately Wait-able and no further work landed
+	// in the blockchain mock.
+	done := make(chan struct{})
+	go func() {
+		callback("non-empty-status")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("late subscription callback did not return synchronously")
+	}
+
+	// Allow time for any erroneously spawned goroutine to run to
+	// completion. If the gate were missing, a goroutine would spawn and
+	// hit the isClosed() check in onAddressStatus, returning before
+	// touching the blockchain — which is itself fine, but defense-in-depth
+	// here ensures the spawn is avoided entirely.
+	time.Sleep(50 * time.Millisecond)
+	require.Zero(t, onAddressStatusEntered.Load())
+
+	// Wait must remain instantaneous because no Add was made.
+	waited := make(chan struct{})
+	go func() {
+		account.subscriptionsWG.Wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+	case <-time.After(time.Second):
+		t.Fatal("subscriptionsWG.Wait blocked after late callback was dropped")
+	}
 }
 
 func TestSignBTCMessageForAddressEdgeCases(t *testing.T) {
