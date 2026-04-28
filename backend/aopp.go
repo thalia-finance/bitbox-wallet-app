@@ -57,6 +57,7 @@ var aoppBTCScriptTypeMap = map[string]signing.ScriptType{
 	"p2pkh":  signing.ScriptTypeP2PKH,
 	"p2wpkh": signing.ScriptTypeP2WPKH,
 	"p2sh":   signing.ScriptTypeP2WPKHP2SH,
+	"p2tr":   signing.ScriptTypeP2TR,
 }
 
 type account struct {
@@ -122,6 +123,7 @@ type AOPP struct {
 	format string
 	// XpubRequired is true if we need to include the extended public key in the callback.
 	XpubRequired bool `json:"xpubRequired"`
+	UseTaproot   bool
 }
 
 // AOPP returns the current AOPP state.
@@ -281,11 +283,12 @@ func (backend *Backend) handleAOPP(uri url.URL) {
 // AOPPApprove is called when the user approves the AOPP request, moving the state from
 // `aoppStateUserApproval` to either `aoppStateAwaitingKeystore` or `aoppStateChoosingAccount`
 // depending on if there is a keystore.
-func (backend *Backend) AOPPApprove() {
+func (backend *Backend) AOPPApprove(useTaproot bool) {
 	defer backend.accountsAndKeystoreLock.Lock()()
 	if backend.aopp.State != aoppStateUserApproval {
 		return
 	}
+	backend.aopp.UseTaproot = useTaproot
 	backend.aopp.State = aoppStateAwaitingKeystore
 	if backend.keystore == nil {
 		backend.notifyAOPP()
@@ -367,7 +370,16 @@ loop:
 	addressList := &unused[0]
 	addr := addressList.Addresses[0]
 	if account.Coin().Code() == coinpkg.CodeBTC {
-		if backend.aopp.format == "any" {
+		// If the requested script type is "any" but the user selected
+		// Taproot, we use Taproot if the account supports it.
+		format := backend.aopp.format
+		log.Infof("Generating address for format %s", format)
+		if format == "any" && backend.aopp.UseTaproot {
+			format = "p2tr"
+			log.Infof("Overriding format to %s", format)
+		}
+
+		if format == "any" {
 			signingConfigIdx = account.Config().Config.SigningConfigurations.FindScriptType(*addressList.ScriptType)
 			if signingConfigIdx == -1 {
 				log.Errorf("Unknown script type %s in receive addresses", *addressList.ScriptType)
@@ -375,15 +387,15 @@ loop:
 				return
 			}
 		} else {
-			expectedScriptType, ok := aoppBTCScriptTypeMap[backend.aopp.format]
+			expectedScriptType, ok := aoppBTCScriptTypeMap[format]
 			if !ok {
-				log.Errorf("Unknown aopp format param %s", backend.aopp.format)
+				log.Errorf("Unknown aopp format param %s", format)
 				backend.aoppSetError(errAOPPUnknown)
 				return
 			}
 			signingConfigIdx = account.Config().Config.SigningConfigurations.FindScriptType(expectedScriptType)
 			if signingConfigIdx == -1 {
-				log.Errorf("Unknown aopp format param %s", backend.aopp.format)
+				log.Errorf("Unknown aopp format param %s", format)
 				backend.aoppSetError(errAOPPUnknown)
 				return
 			}

@@ -42,8 +42,8 @@ export const cancel = (): Promise<null> => {
   return apiPost('aopp/cancel');
 };
 
-export const approve = (): Promise<null> => {
-  return apiPost('aopp/approve');
+export const approve = (useTaproot: boolean): Promise<null> => {
+  return apiPost('aopp/approve', { useTaproot });
 };
 
 export const chooseAccount = (accountCode: AccountCode): Promise<null> => {

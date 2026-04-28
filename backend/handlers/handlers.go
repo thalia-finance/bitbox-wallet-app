@@ -98,7 +98,7 @@ type Backend interface {
 	RenameAccount(accountCode accountsTypes.Code, name string) error
 	AOPP() backend.AOPP
 	AOPPCancel()
-	AOPPApprove()
+	AOPPApprove(useTaproot bool)
 	AOPPChooseAccount(code accountsTypes.Code)
 	GetAccountFromCode(code accountsTypes.Code) (accounts.Interface, error)
 	HTTPClient() *http.Client
@@ -1539,7 +1539,13 @@ func (handlers *Handlers) postAOPPCancel(r *http.Request) interface{} {
 }
 
 func (handlers *Handlers) postAOPPApprove(r *http.Request) interface{} {
-	handlers.backend.AOPPApprove()
+	var request struct {
+		UseTaproot bool `json:"useTaproot"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		// Do nothing, just ignore the input.
+	}
+	handlers.backend.AOPPApprove(request.UseTaproot)
 	return nil
 }
 

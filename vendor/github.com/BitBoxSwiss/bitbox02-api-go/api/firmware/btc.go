@@ -652,14 +652,12 @@ func (device *Device) nonAtomicBTCSignMessage(
 	scriptConfig *messages.BTCScriptConfigWithKeypath,
 	message []byte,
 ) (*BTCSignMessageResult, error) {
-	if isTaproot(scriptConfig) {
-		return nil, errp.New("taproot not supported")
-	}
+	taproot := isTaproot(scriptConfig)
 	if !device.version.AtLeast(semver.NewSemVer(9, 2, 0)) {
 		return nil, UnsupportedError("9.2.0")
 	}
 
-	supportsAntiklepto := device.version.AtLeast(semver.NewSemVer(9, 5, 0))
+	supportsAntiklepto := device.version.AtLeast(semver.NewSemVer(9, 5, 0)) && !taproot
 	var hostNonceCommitment *messages.AntiKleptoHostNonceCommitment
 	var hostNonce []byte
 
@@ -731,6 +729,12 @@ func (device *Device) nonAtomicBTCSignMessage(
 	// See https://github.com/spesmilo/electrum/blob/84dc181b6e7bb20e88ef6b98fb8925c5f645a765/electrum/ecc.py#L521-L523
 	const compressed = 4 // BitBox02 uses only compressed pubkeys
 	electrumSig65 := append([]byte{27 + compressed + recID}, sig...)
+
+	if taproot {
+		sig = signature[:]
+		recID = 0
+		electrumSig65 = signature[:]
+	}
 	return &BTCSignMessageResult{
 		Signature:     sig,
 		RecID:         recID,

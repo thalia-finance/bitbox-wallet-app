@@ -8,7 +8,7 @@ import { equal } from '@/utils/equal';
 import { SimpleMarkup } from '@/utils/markup';
 import { View, ViewHeader, ViewContent, ViewButtons } from '@/components/view/view';
 import { Message } from '@/components/message/message';
-import { Button, Field, Label, Select } from '@/components/forms';
+import { Button, Checkbox, Field, Label, Select } from '@/components/forms';
 import { CopyableInput } from '@/components/copy/Copy';
 import { PointToBitBox02 } from '@/components/icon';
 import { VerifyAddress } from './verifyaddress';
@@ -32,6 +32,7 @@ export const Aopp = () => {
   const [aopp, setAopp] = useState<aoppAPI.Aopp>();
 
   const [prevAopp, setPrevAopp] = useState(aopp);
+  const [useTaproot, setUseTaproot] = useState<boolean>(false);
 
   useEffect(() => {
     aoppAPI.getAOPP().then(setAopp);
@@ -54,6 +55,10 @@ export const Aopp = () => {
       aoppAPI.chooseAccount(accountCode);
     }
     e.preventDefault();
+  };
+
+  const handleChangeTaproot = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setUseTaproot(e.target.checked);
   };
 
   if (!aopp) {
@@ -109,9 +114,14 @@ export const Aopp = () => {
                 <Message type="info"> {t('aopp.xpubRequested', { host: `${host}` })} </Message>
               ) : ''
           }
+          <Checkbox
+            id="useTaproot"
+            onChange={handleChangeTaproot}
+            checked={useTaproot}
+            label={t('aopp.useTaproot')} />
         </ViewContent>
         <ViewButtons>
-          <Button primary onClick={aoppAPI.approve}>{t('button.continue')}</Button>
+          <Button primary onClick={() => aoppAPI.approve(useTaproot)}>{t('button.continue')}</Button>
           <Button secondary onClick={aoppAPI.cancel}>{t('dialog.cancel')}</Button>
         </ViewButtons>
       </View>
