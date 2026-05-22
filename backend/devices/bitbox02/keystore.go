@@ -556,6 +556,13 @@ func (keystore *keystore) CanSignMessage(code coinpkg.Code) bool {
 }
 
 // SignBTCMessage implements keystore.Keystore.
+//
+// For P2TR (taproot) the firmware produces a BIP-322 simple-encoded
+// signature (3-byte ASCII variant prefix + serialized witness with
+// the 64-byte Schnorr signature). For non-taproot script types the
+// firmware produces the legacy 65-byte Electrum-format signature.
+// Return the right bytes for the script type so callers see a single
+// uniform "signature blob" interface.
 func (keystore *keystore) SignBTCMessage(message []byte, keypath signing.AbsoluteKeypath, scriptType signing.ScriptType, coin coinpkg.Code) ([]byte, error) {
 	sc, ok := btcMsgScriptTypeMap[scriptType]
 	if !ok {
@@ -579,7 +586,10 @@ func (keystore *keystore) SignBTCMessage(message []byte, keypath signing.Absolut
 	if err != nil {
 		return nil, err
 	}
-	return signResult.ElectrumSig65, err
+	if scriptType == signing.ScriptTypeP2TR {
+		return signResult.Bip322Signature, nil
+	}
+	return signResult.ElectrumSig65, nil
 }
 
 // SignETHMessage implements keystore.Keystore.

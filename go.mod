@@ -64,4 +64,4 @@ require (
 )
 
 // Point at the fork that has Bip322Message on PSBTSignOptions.
-replace github.com/BitBoxSwiss/bitbox02-api-go => github.com/thalia-finance/bitbox02-api-go v0.0.0-20260521105253-a59a6014eb59
+replace github.com/BitBoxSwiss/bitbox02-api-go => github.com/thalia-finance/bitbox02-api-go v0.0.0-20260522135609-e4873d911edc

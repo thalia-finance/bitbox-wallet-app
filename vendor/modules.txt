@@ -1,4 +1,4 @@
-# github.com/BitBoxSwiss/bitbox02-api-go v0.0.0-20260420184007-d546462995df
+# github.com/BitBoxSwiss/bitbox02-api-go v0.0.0-20260420184007-d546462995df => github.com/thalia-finance/bitbox02-api-go v0.0.0-20260522135609-e4873d911edc
 ## explicit; go 1.24
 github.com/BitBoxSwiss/bitbox02-api-go/api/bootloader
 github.com/BitBoxSwiss/bitbox02-api-go/api/common
@@ -338,3 +338,4 @@ google.golang.org/protobuf/types/known/emptypb
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
+# github.com/BitBoxSwiss/bitbox02-api-go => github.com/thalia-finance/bitbox02-api-go v0.0.0-20260522135609-e4873d911edc
