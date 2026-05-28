@@ -3,6 +3,7 @@
 package btc
 
 import (
+	"bytes"
 	"math/big"
 	"strconv"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/BitBoxSwiss/bitbox-wallet-app/backend/signing"
 	"github.com/BitBoxSwiss/bitbox-wallet-app/util/errp"
 	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/wire"
 )
 
@@ -276,4 +278,63 @@ func (account *Account) TxProposal(
 	return coin.NewAmountFromInt64(int64(txProposal.Amount)),
 		coin.NewAmountFromInt64(int64(txProposal.Fee)),
 		coin.NewAmountFromInt64(int64(txProposal.Total())), nil
+}
+
+// ActiveTxProposalPSBT returns a stand-alone PSBT snapshot of the
+// most recent TxProposal call, or nil if no proposal is active.
+//
+// The returned packet is a deep copy (round-tripped through Serialize/
+// NewFromRawBytes) so callers cannot observe internal mutations once a
+// subsequent TxProposal overwrites the active proposal. The internal
+// PSBT held by the proposal has no WitnessUtxo set on its inputs at
+// this stage (that is added during signing); to keep the snapshot
+// self-contained, this accessor populates WitnessUtxo from the
+// PreviousOutputs the proposal already resolved, before serialising.
+// The result is a complete PSBT a caller can introspect for inputs
+// (PreviousOutPoint + value), outputs and fee without holding any
+// reference to the proposal's internal state.
+//
+// Concurrency-safe: takes the same read lock SendTx uses.
+func (account *Account) ActiveTxProposalPSBT() (*psbt.Packet, error) {
+	unlock := account.activeTxProposalLock.RLock()
+	defer unlock()
+
+	proposal := account.activeTxProposal
+	if proposal == nil {
+		return nil, nil
+	}
+
+	// Work on a separate packet so we never mutate the proposal's
+	// own PSBT (the signing path expects to populate WitnessUtxo
+	// itself, and panics or rejects if it finds it pre-set).
+	var buf bytes.Buffer
+	if err := proposal.Psbt.Serialize(&buf); err != nil {
+		return nil, errp.WithMessage(err, "serialize active tx proposal PSBT")
+	}
+	snapshot, err := psbt.NewFromRawBytes(&buf, false)
+	if err != nil {
+		return nil, errp.WithMessage(err, "deserialize active tx proposal PSBT")
+	}
+
+	// Populate WitnessUtxo on every input. PreviousOutputs is
+	// keyed by outpoint, so the order doesn't matter — we look up
+	// by the snapshot's own input order.
+	updater, err := psbt.NewUpdater(snapshot)
+	if err != nil {
+		return nil, errp.WithMessage(err, "new updater on snapshot PSBT")
+	}
+	for index, txIn := range snapshot.UnsignedTx.TxIn {
+		prevOut, ok := proposal.PreviousOutputs[txIn.PreviousOutPoint]
+		if !ok {
+			// An input without a matching PreviousOutputs entry
+			// would mean the proposal is internally inconsistent;
+			// surface it rather than emit a half-populated PSBT.
+			return nil, errp.Newf("no PreviousOutputs entry for input %d", index)
+		}
+		if err := updater.AddInWitnessUtxo(prevOut.TxOut, index); err != nil {
+			return nil, errp.WithMessage(err, "add WitnessUtxo to snapshot")
+		}
+	}
+
+	return snapshot, nil
 }
