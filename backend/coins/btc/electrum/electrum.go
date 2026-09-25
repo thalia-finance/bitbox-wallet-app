@@ -57,12 +57,38 @@ func establishConnection(
 	return conn, nil
 }
 
+// systemRootCAs is the trust pool used for servers configured without a pinned certificate. nil
+// means the platform's system roots. Tests override it to trust a locally generated CA.
+var systemRootCAs *x509.CertPool
+
+// newTLSConnection wraps a connection to address in TLS.
+//
+// If rootCert is empty, the server is authenticated like any other TLS server: its chain must
+// verify against the system roots and its certificate must be valid for the server's hostname (or
+// IP address). This is for servers with publicly trusted certificates, which are renewed regularly
+// and therefore can't be pinned.
+//
+// Otherwise the chain must verify against rootCert alone, and the hostname is not checked, so that
+// servers with self-signed certificates (or certificates from a private CA) can be pinned.
 func newTLSConnection(address string, rootCert string, dialer proxy.Dialer) (*tls.Conn, error) {
 	// hostname is used as server name in SNI client hello during the handshake.
 	// It is set to empty string by tls.Client if address is an IP address.
 	hostname, _, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, errp.WithMessage(err, fmt.Sprintf("Invalid server address %q", address))
+	}
+
+	if rootCert == "" {
+		conn, err := dialer.Dial("tcp", address)
+		if err != nil {
+			return nil, errp.WithStack(err)
+		}
+		// ServerName is also what the certificate is verified against. For an IP address, Go
+		// matches it against the certificate's IP SANs and sends no SNI.
+		return tls.Client(conn, &tls.Config{
+			ServerName: hostname,
+			RootCAs:    systemRootCAs,
+		}), nil
 	}
 
 	caCertPool := x509.NewCertPool()
