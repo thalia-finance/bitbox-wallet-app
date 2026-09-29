@@ -41,6 +41,7 @@ var (
 	minETHTypedMessageVersion          = semver.NewSemVer(9, 12, 0)
 	minPaymentRequestVersion           = semver.NewSemVer(9, 20, 0)
 	minSwapPaymentRequestVersion       = semver.NewSemVer(9, 26, 0)
+	minMuSig2Version                   = semver.NewSemVer(9, 28, 0)
 )
 
 func (keystore *keystore) requireFirmwareVersion(minVersion *semver.SemVer) error {
@@ -63,6 +64,8 @@ func (keystore *keystore) SupportsFeature(feature keystorePkg.Feature) error {
 		return keystore.requireFirmwareVersion(minPaymentRequestVersion)
 	case keystorePkg.FeatureSwapPaymentRequests:
 		return keystore.requireFirmwareVersion(minSwapPaymentRequestVersion)
+	case keystorePkg.FeatureBTCMuSig2Signing:
+		return keystore.requireFirmwareVersion(minMuSig2Version)
 	default:
 		return keystorePkg.ErrUnsupportedFeature
 	}

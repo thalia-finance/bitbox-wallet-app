@@ -40,6 +40,9 @@ const (
 	FeaturePaymentRequests Feature = "paymentRequests"
 	// FeatureSwapPaymentRequests requires support for swap payment requests.
 	FeatureSwapPaymentRequests Feature = "swapPaymentRequests"
+	// FeatureBTCMuSig2Signing requires support for contributing to BIP-327 MuSig2 signing sessions
+	// of Taproot wallet policies containing musig() keys, via the BIP-373 PSBT fields.
+	FeatureBTCMuSig2Signing Feature = "btcMuSig2Signing"
 )
 
 // KeystoreError represents errors related to the keystore.

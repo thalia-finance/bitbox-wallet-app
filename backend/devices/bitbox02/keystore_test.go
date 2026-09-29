@@ -171,6 +171,12 @@ func TestSigningFirmwareRequirements(t *testing.T) {
 			unsupportedVersion: semver.NewSemVer(9, 25, 0),
 			supportedVersion:   semver.NewSemVer(9, 26, 0),
 		},
+		{
+			name:               "MuSig2 signing",
+			feature:            keystorePkg.FeatureBTCMuSig2Signing,
+			unsupportedVersion: semver.NewSemVer(9, 27, 1),
+			supportedVersion:   semver.NewSemVer(9, 28, 0),
+		},
 	}
 
 	for _, test := range tests {

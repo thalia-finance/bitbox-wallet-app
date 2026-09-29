@@ -56,7 +56,8 @@ export type TKeystoreFeature =
   | 'messageSigning'
   | 'ethTypedMessageSigning'
   | 'paymentRequests'
-  | 'swapPaymentRequests';
+  | 'swapPaymentRequests'
+  | 'btcMuSig2Signing';
 
 export const connectKeystore = (
   rootFingerprint: string,
