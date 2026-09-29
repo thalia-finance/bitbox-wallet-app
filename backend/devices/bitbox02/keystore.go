@@ -33,6 +33,8 @@ type keystore struct {
 
 	rootFingerMu sync.Mutex
 	rootFinger   []byte // cached result of RootFingerprint
+
+	muSig2 muSig2Sessions
 }
 
 var (
@@ -389,6 +391,14 @@ func (keystore *keystore) signBTCTransaction(btcProposedTx *btc.ProposedTransact
 	// Probe each entry for the ScriptConfigProvider interface and use
 	// the first match. Standard single-sig flows have no Extension
 	// and skip this entirely.
+	//
+	// Go through the accessor for the fingerprint: the cache may not be
+	// populated yet, and a nil fingerprint makes the provider pick the wrong
+	// key as ours.
+	rootFingerprint, err := keystore.RootFingerprint()
+	if err != nil {
+		return err
+	}
 	var forceScriptConfig *messages.BTCScriptConfigWithKeypath
 	for _, cfg := range btcProposedTx.AccountSigningConfigurations {
 		if cfg.Extension == nil {
@@ -397,12 +407,6 @@ func (keystore *keystore) signBTCTransaction(btcProposedTx *btc.ProposedTransact
 		provider, ok := cfg.Extension.(ScriptConfigProvider)
 		if !ok {
 			continue
-		}
-		// Go through the accessor: the cache may not be populated yet, and
-		// a nil fingerprint makes the provider pick the wrong key as ours.
-		rootFingerprint, err := keystore.RootFingerprint()
-		if err != nil {
-			return err
 		}
 		sc, err := provider.BB02ScriptConfig(rootFingerprint)
 		if err != nil {
@@ -430,6 +434,26 @@ func (keystore *keystore) signBTCTransaction(btcProposedTx *btc.ProposedTransact
 		// regular tx-signing path that would reject version=0 outright.
 		Bip322Message: btcProposedTx.Bip322Message,
 	}
+
+	// For MuSig2 inputs, what the device contributes depends on the nonces
+	// and partial signatures the PSBT already carries. This call may be the
+	// nonce round, the signing round after it, or the single round of the
+	// last participant to contribute a nonce.
+	packet := btcProposedTx.TXProposal.Psbt
+	step, err := firmware.BTCPSBTMuSig2Step(packet, rootFingerprint)
+	if err != nil {
+		return err
+	}
+	txHash := packet.UnsignedTx.TxHash()
+	muSig2Options, sign, staleSession, err := keystore.muSig2.begin(step, txHash)
+	keystore.abortMuSig2(staleSession)
+	if err != nil {
+		return err
+	}
+	if !sign {
+		return nil
+	}
+	signOptions.MuSig2 = muSig2Options
 
 	// Include previous transactions in PSBT if the BitBox requires it.
 	needsPrevTxs, err := keystore.device.BTCSignNeedsNonWitnessUTXOs(
@@ -461,7 +485,11 @@ func (keystore *keystore) signBTCTransaction(btcProposedTx *btc.ProposedTransact
 	if firmware.IsErrorAbort(err) {
 		return errp.WithStack(keystorePkg.ErrSigningAborted)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	keystore.muSig2.complete(muSig2Options, txHash)
+	return nil
 }
 
 func (keystore *keystore) signETHTransaction(txProposal *eth.TxProposal) error {

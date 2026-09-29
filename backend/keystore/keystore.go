@@ -64,6 +64,20 @@ var (
 // ErrSigningAborted is used when the user aborts a signing in process (e.g. abort on HW wallet).
 var ErrSigningAborted = errors.New("signing aborted by user")
 
+// ErrMuSig2SessionLost is returned when a keystore is asked to complete a MuSig2 signing session it
+// contributed a nonce to, but no longer holds the state for, e.g. because the device was
+// reconnected in between. The nonce can never be used, so every participant has to start a new
+// signing session.
+var ErrMuSig2SessionLost = errors.New("MuSig2 signing session lost")
+
+// MuSig2Resetter is implemented by keystores that keep MuSig2 signing state between two
+// SignTransaction calls, i.e. between contributing a nonce and a partial signature.
+type MuSig2Resetter interface {
+	// MuSig2Reset abandons every pending MuSig2 signing session of the keystore. The nonces it
+	// contributed to them can no longer be used to sign.
+	MuSig2Reset()
+}
+
 // Event instances are emitted by keystore implementations.
 type Event string
 
