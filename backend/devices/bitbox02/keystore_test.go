@@ -17,6 +17,7 @@ import (
 	"github.com/BitBoxSwiss/bitbox-wallet-app/backend/signing"
 	"github.com/BitBoxSwiss/bitbox-wallet-app/util/socksproxy"
 	bitbox02common "github.com/BitBoxSwiss/bitbox02-api-go/api/common"
+	"github.com/BitBoxSwiss/bitbox02-api-go/api/firmware/messages"
 	"github.com/BitBoxSwiss/bitbox02-api-go/util/semver"
 	"github.com/btcsuite/btcd/btcutil/v2/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg/v2"
@@ -221,4 +222,46 @@ func TestSoftwareKeystoreSigningIsNotFirmwareGated(t *testing.T) {
 		coinpkg.CodeBTC,
 	)
 	require.NoError(t, err)
+}
+
+// recordingScriptConfigProvider is a configuration extension that records the
+// fingerprint it is asked to build a script config for.
+type recordingScriptConfigProvider struct {
+	signing.ConfigurationExtension
+
+	calls int
+}
+
+func (p *recordingScriptConfigProvider) BB02ScriptConfig(
+	[]byte) (*messages.BTCScriptConfigWithKeypath, error) {
+
+	p.calls++
+	return nil, errors.New("unexpected script config request")
+}
+
+// TestSignBTCTransactionRootFingerprint asserts that the script config of an
+// extension is built with the device's root fingerprint even if it is not
+// cached yet, and that signing fails if it cannot be fetched.
+func TestSignBTCTransactionRootFingerprint(t *testing.T) {
+	keystore := newKeystoreWithVersion(semver.NewSemVer(9, 20, 0))
+	provider := &recordingScriptConfigProvider{}
+	packet, err := psbt.NewFromUnsignedTx(wire.NewMsgTx(2))
+	require.NoError(t, err)
+
+	err = keystore.SignTransaction(&btc.ProposedTransaction{
+		TXProposal: &maketx.TxProposal{
+			Coin: btc.NewCoin(
+				coinpkg.CodeBTC, "Bitcoin", "BTC",
+				coinpkg.BtcUnitDefault, &chaincfg.MainNetParams,
+				"", nil, "", "", socksproxy.NewSocksProxy(false, ""),
+			),
+			Psbt: packet,
+		},
+		AccountSigningConfigurations: signing.Configurations{{
+			Extension: provider,
+		}},
+	})
+	// The device is not reachable, so its fingerprint is unknown.
+	require.Error(t, err)
+	require.Zero(t, provider.calls)
 }

@@ -395,7 +395,13 @@ func (keystore *keystore) signBTCTransaction(btcProposedTx *btc.ProposedTransact
 		if !ok {
 			continue
 		}
-		sc, err := provider.BB02ScriptConfig(keystore.rootFinger)
+		// Go through the accessor: the cache may not be populated yet, and
+		// a nil fingerprint makes the provider pick the wrong key as ours.
+		rootFingerprint, err := keystore.RootFingerprint()
+		if err != nil {
+			return err
+		}
+		sc, err := provider.BB02ScriptConfig(rootFingerprint)
 		if err != nil {
 			return errp.Wrap(err, "failed to build BB02 script config")
 		}
