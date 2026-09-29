@@ -15,8 +15,8 @@ const (
 	// SignatureSize is the size of an encoded Schnorr signature.
 	SignatureSize = 64
 
-	// scalarSize is the size of an encoded big endian scalar.
-	scalarSize = 32
+	// ScalarSize is the size of an encoded big endian scalar.
+	ScalarSize = 32
 )
 
 var (
@@ -91,7 +91,10 @@ func ParseSignature(sig []byte) (*Signature, error) {
 		return nil, signatureError(ecdsa_schnorr.ErrSigRTooBig, str)
 	}
 	var s btcec.ModNScalar
-	s.SetByteSlice(sig[32:64])
+	if overflow := s.SetByteSlice(sig[32:64]); overflow {
+		str := "invalid signature: s >= group order"
+		return nil, signatureError(ecdsa_schnorr.ErrSigSTooBig, str)
+	}
 
 	// Return the signature.
 	return NewSignature(&r, &s), nil
@@ -129,9 +132,9 @@ func schnorrVerify(sig *Signature, hash []byte, pubKeyBytes []byte) error {
 	// Step 1.
 	//
 	// Fail if m is not 32 bytes
-	if len(hash) != scalarSize {
+	if len(hash) != ScalarSize {
 		str := fmt.Sprintf("wrong size for message (got %v, want %v)",
-			len(hash), scalarSize)
+			len(hash), ScalarSize)
 		return signatureError(ecdsa_schnorr.ErrInvalidHashLen, str)
 	}
 
@@ -231,8 +234,8 @@ func (sig *Signature) Verify(hash []byte, pubKey *btcec.PublicKey) bool {
 }
 
 // zeroArray zeroes the memory of a scalar array.
-func zeroArray(a *[scalarSize]byte) {
-	for i := 0; i < scalarSize; i++ {
+func zeroArray(a *[ScalarSize]byte) {
+	for i := 0; i < ScalarSize; i++ {
 		a[i] = 0x00
 	}
 }
@@ -441,9 +444,9 @@ func Sign(privKey *btcec.PrivateKey, hash []byte,
 	// Step 2.
 	//
 	// Fail if m is not 32 bytes
-	if len(hash) != scalarSize {
+	if len(hash) != ScalarSize {
 		str := fmt.Sprintf("wrong size for message hash (got %v, want %v)",
-			len(hash), scalarSize)
+			len(hash), ScalarSize)
 		return nil, signatureError(ecdsa_schnorr.ErrInvalidHashLen, str)
 	}
 
@@ -516,7 +519,7 @@ func Sign(privKey *btcec.PrivateKey, hash []byte,
 		return sig, nil
 	}
 
-	var privKeyBytes [scalarSize]byte
+	var privKeyBytes [ScalarSize]byte
 	privKeyScalar.PutBytes(&privKeyBytes)
 	defer zeroArray(&privKeyBytes)
 	for iteration := uint32(0); ; iteration++ {

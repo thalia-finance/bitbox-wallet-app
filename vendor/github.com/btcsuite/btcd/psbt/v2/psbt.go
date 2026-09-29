@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"unicode/utf8"
 
 	"github.com/btcsuite/btcd/btcutil/v2"
 	"github.com/btcsuite/btcd/wire/v2"
@@ -142,6 +143,19 @@ type Packet struct {
 	// derived.
 	XPubs []XPub
 
+	// GenericSignedMessage contains a BIP-0322 generic message to be
+	// signed. An empty message is a valid message, that's why this field
+	// is a nillable string.
+	GenericSignedMessage *string
+
+	// SilentPaymentShares is a list of ECDH shares that are used to derive
+	// the shared secret for a silent payment.
+	SilentPaymentShares []SilentPaymentShare
+
+	// SilentPaymentDLEQs is a list of DLEQ proofs that are used to prove
+	// the validity of the shares for a silent payment.
+	SilentPaymentDLEQs []SilentPaymentDLEQ
+
 	// Unknowns are the set of custom types (global only) within this PSBT.
 	Unknowns []*Unknown
 }
@@ -169,14 +183,18 @@ func NewFromUnsignedTx(tx *wire.MsgTx) (*Packet, error) {
 	inSlice := make([]PInput, len(tx.TxIn))
 	outSlice := make([]POutput, len(tx.TxOut))
 	xPubSlice := make([]XPub, 0)
+	spsSlice := make([]SilentPaymentShare, 0)
+	spdSlice := make([]SilentPaymentDLEQ, 0)
 	unknownSlice := make([]*Unknown, 0)
 
 	return &Packet{
-		UnsignedTx: tx,
-		Inputs:     inSlice,
-		Outputs:    outSlice,
-		XPubs:      xPubSlice,
-		Unknowns:   unknownSlice,
+		UnsignedTx:          tx,
+		Inputs:              inSlice,
+		Outputs:             outSlice,
+		XPubs:               xPubSlice,
+		SilentPaymentShares: spsSlice,
+		SilentPaymentDLEQs:  spdSlice,
+		Unknowns:            unknownSlice,
 	}, nil
 }
 
@@ -185,15 +203,19 @@ func NewFromUnsignedTx(tx *wire.MsgTx) (*Packet, error) {
 // argument b64 is true, the passed byte slice is decoded from base64 encoding
 // before processing.
 //
+// The parsing is strict: base64 input must not contain whitespace or any
+// characters outside the RFC4648 standard alphabet, and any data after the
+// packet results in ErrInvalidPsbtFormat. For raw input, trailing data is only
+// detected when the reader can report its remaining length without blocking
+// (such as bytes.Reader); a plain raw stream is not probed past the packet, so
+// the reader is left positioned directly after it. Base64 input is decoded
+// incrementally and read through its canonical end.
+//
 // NOTE: To create a Packet from one's own data, rather than reading in a
 // serialization from a counterparty, one should use a psbt.New.
 func NewFromRawBytes(r io.Reader, b64 bool) (*Packet, error) {
-	// If the PSBT is encoded in bas64, then we'll create a new wrapper
-	// reader that'll allow us to incrementally decode the contents of the
-	// io.Reader.
 	if b64 {
-		based64EncodedReader := r
-		r = base64.NewDecoder(base64.StdEncoding, based64EncodedReader)
+		r = newStrictBase64Decoder(r)
 	}
 
 	// The Packet struct does not store the fixed magic bytes, but they
@@ -225,11 +247,9 @@ func NewFromRawBytes(r io.Reader, b64 bool) (*Packet, error) {
 	if err != nil {
 		return nil, err
 	}
-	msgTx := wire.NewMsgTx(2)
-
 	// BIP-0174 states: "The transaction must be in the old serialization
 	// format (without witnesses)."
-	err = msgTx.DeserializeNoWitness(bytes.NewReader(value))
+	msgTx, err := readTransaction(value, true)
 	if err != nil {
 		return nil, err
 	}
@@ -240,8 +260,11 @@ func NewFromRawBytes(r io.Reader, b64 bool) (*Packet, error) {
 	// Next we parse any unknowns that may be present, making sure that we
 	// break at the separator.
 	var (
-		xPubSlice    []XPub
-		unknownSlice []*Unknown
+		xPubSlice            []XPub
+		genericSignedMessage *string
+		spsSlice             []SilentPaymentShare
+		spdSlice             []SilentPaymentDLEQ
+		unknownSlice         []*Unknown
 	)
 	for {
 		keyint, keydata, err := getKey(r)
@@ -266,14 +289,62 @@ func NewFromRawBytes(r io.Reader, b64 bool) (*Packet, error) {
 				return nil, err
 			}
 
-			// Duplicate keys are not allowed
+			// Duplicate keys are not allowed.
 			for _, x := range xPubSlice {
-				if bytes.Equal(x.ExtendedKey, keyData) {
+				if bytes.Equal(x.ExtendedKey, keydata) {
 					return nil, ErrDuplicateKey
 				}
 			}
 
 			xPubSlice = append(xPubSlice, *xPub)
+
+		case GenericSignedMessageType:
+			// Validate that there is no keydata and no duplicate
+			// message as mandated by BIP322.
+			if len(keydata) > 0 || genericSignedMessage != nil {
+				return nil, ErrInvalidPsbtFormat
+			}
+
+			// Golang's default string encoding is UTF-8, so we
+			// don't need to convert anything. But we need to
+			// validate that the string only contains valid UTF-8
+			// sequences.
+			if !utf8.Valid(value) {
+				return nil, ErrInvalidPsbtFormat
+			}
+
+			messageString := string(value)
+			genericSignedMessage = &messageString
+
+		case SilentPaymentShareType:
+			share, err := ReadSilentPaymentShare(keydata, value)
+			if err != nil {
+				return nil, err
+			}
+
+			// Duplicate keys are not allowed.
+			for _, x := range spsSlice {
+				if x.EqualKey(share) {
+					return nil, ErrDuplicateKey
+				}
+			}
+
+			spsSlice = append(spsSlice, *share)
+
+		case SilentPaymentDLEQType:
+			proof, err := ReadSilentPaymentDLEQ(keydata, value)
+			if err != nil {
+				return nil, err
+			}
+
+			// Duplicate keys are not allowed.
+			for _, x := range spdSlice {
+				if x.EqualKey(proof) {
+					return nil, ErrDuplicateKey
+				}
+			}
+
+			spdSlice = append(spdSlice, *proof)
 
 		default:
 			keyintanddata := []byte{byte(keyint)}
@@ -313,11 +384,14 @@ func NewFromRawBytes(r io.Reader, b64 bool) (*Packet, error) {
 
 	// Populate the new Packet object.
 	newPsbt := Packet{
-		UnsignedTx: msgTx,
-		Inputs:     inSlice,
-		Outputs:    outSlice,
-		XPubs:      xPubSlice,
-		Unknowns:   unknownSlice,
+		UnsignedTx:           msgTx,
+		Inputs:               inSlice,
+		Outputs:              outSlice,
+		XPubs:                xPubSlice,
+		GenericSignedMessage: genericSignedMessage,
+		SilentPaymentShares:  spsSlice,
+		SilentPaymentDLEQs:   spdSlice,
+		Unknowns:             unknownSlice,
 	}
 
 	// Extended sanity checking is applied here to make sure the
@@ -326,7 +400,91 @@ func NewFromRawBytes(r io.Reader, b64 bool) (*Packet, error) {
 		return nil, err
 	}
 
+	if b64 {
+		if err := assertBase64FullyConsumed(r); err != nil {
+			return nil, err
+		}
+	} else {
+		// Reject any trailing data after the packet when a raw reader can
+		// report it without an additional read. Plain raw streams are not
+		// probed, as a read for EOF could block forever on an open
+		// connection that has already delivered a complete packet.
+		if lr, ok := r.(interface{ Len() int }); ok && lr.Len() > 0 {
+			return nil, ErrInvalidPsbtFormat
+		}
+	}
+
 	return &newPsbt, nil
+}
+
+// canonicalBase64Reader rejects the CR and LF bytes that encoding/base64
+// otherwise ignores while decoding.
+type canonicalBase64Reader struct {
+	io.Reader
+}
+
+// Read returns encoded bytes only when they use the canonical RFC4648
+// alphabet.
+func (r *canonicalBase64Reader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if bytes.ContainsAny(p[:n], "\r\n") {
+		return 0, ErrInvalidPsbtFormat
+	}
+
+	return n, err
+}
+
+// strictBase64Decoder maps base64 syntax and truncation errors to
+// ErrInvalidPsbtFormat while preserving other errors returned by the
+// caller-supplied reader.
+type strictBase64Decoder struct {
+	io.Reader
+}
+
+// Read returns incrementally decoded bytes.
+func (d *strictBase64Decoder) Read(p []byte) (int, error) {
+	n, err := d.Reader.Read(p)
+	if err == nil || errors.Is(err, io.EOF) {
+		return n, err
+	}
+
+	var corruptInput base64.CorruptInputError
+	if errors.As(err, &corruptInput) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, ErrInvalidPsbtFormat) {
+
+		return n, ErrInvalidPsbtFormat
+	}
+
+	return n, err
+}
+
+// newStrictBase64Decoder returns a streaming RFC4648 base64 decoder that
+// rejects whitespace and only accepts '=' as final padding.
+func newStrictBase64Decoder(r io.Reader) io.Reader {
+	canonicalReader := &canonicalBase64Reader{Reader: r}
+	decoder := base64.NewDecoder(
+		base64.StdEncoding.Strict(), canonicalReader,
+	)
+
+	return &strictBase64Decoder{Reader: decoder}
+}
+
+// assertBase64FullyConsumed verifies the end of the base64 envelope and
+// rejects decoded data after the PSBT packet.
+func assertBase64FullyConsumed(r io.Reader) error {
+	var trailing [1]byte
+	_, err := io.ReadFull(r, trailing[:])
+	switch {
+	case err == nil:
+		return ErrInvalidPsbtFormat
+
+	case errors.Is(err, io.EOF):
+		return nil
+
+	default:
+		return err
+	}
 }
 
 // Serialize creates a binary serialization of the referenced Packet struct
@@ -363,6 +521,39 @@ func (p *Packet) Serialize(w io.Writer) error {
 		)
 		err := serializeKVPairWithType(
 			w, uint8(XPubType), xPub.ExtendedKey, pathBytes,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Serialize the generic signed message.
+	if p.GenericSignedMessage != nil {
+		msgBytes := []byte(*p.GenericSignedMessage)
+		err := serializeKVPairWithType(
+			w, uint8(GenericSignedMessageType), nil, msgBytes,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Serialize the global silent payment shares.
+	for _, share := range p.SilentPaymentShares {
+		keyBytes, valueBytes := SerializeSilentPaymentShare(&share)
+		err := serializeKVPairWithType(
+			w, uint8(SilentPaymentShareType), keyBytes, valueBytes,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Serialize the global silent payment DLEQ proofs.
+	for _, dleq := range p.SilentPaymentDLEQs {
+		keyBytes, valueBytes := SerializeSilentPaymentDLEQ(&dleq)
+		err := serializeKVPairWithType(
+			w, uint8(SilentPaymentDLEQType), keyBytes, valueBytes,
 		)
 		if err != nil {
 			return err
@@ -465,4 +656,19 @@ func (p *Packet) GetTxFee() (btcutil.Amount, error) {
 
 	fee := sumInputs - sumOutputs
 	return btcutil.Amount(fee), nil
+}
+
+// Copy creates a deep copy of the packet by serializing and deserializing it.
+func (p *Packet) Copy() (*Packet, error) {
+	if p == nil {
+		return nil, nil
+	}
+
+	var buf bytes.Buffer
+	err := p.Serialize(&buf)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewFromRawBytes(&buf, false)
 }

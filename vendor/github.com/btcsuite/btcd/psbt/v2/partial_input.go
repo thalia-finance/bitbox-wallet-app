@@ -3,7 +3,9 @@ package psbt
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
+	"slices"
 	"sort"
 
 	"github.com/btcsuite/btcd/txscript/v2"
@@ -28,6 +30,11 @@ type PInput struct {
 	TaprootBip32Derivation []*TaprootBip32Derivation
 	TaprootInternalKey     []byte
 	TaprootMerkleRoot      []byte
+	SilentPaymentShares    []SilentPaymentShare
+	SilentPaymentDLEQs     []SilentPaymentDLEQ
+	MuSig2Participants     []*MuSig2Participants
+	MuSig2PubNonces        []*MuSig2PubNonce
+	MuSig2PartialSigs      []*MuSig2PartialSig
 	Unknowns               []*Unknown
 }
 
@@ -90,9 +97,7 @@ func (pi *PInput) deserialize(r io.Reader) error {
 			if keyData != nil {
 				return ErrInvalidKeyData
 			}
-			tx := wire.NewMsgTx(2)
-
-			err := tx.Deserialize(bytes.NewReader(value))
+			tx, err := readTransaction(value, false)
 			if err != nil {
 				return err
 			}
@@ -363,6 +368,92 @@ func (pi *PInput) deserialize(r io.Reader) error {
 
 			pi.TaprootMerkleRoot = value
 
+		case SilentPaymentShareInputType:
+			share, err := ReadSilentPaymentShare(keyData, value)
+			if err != nil {
+				return err
+			}
+
+			// Duplicate keys are not allowed.
+			for _, x := range pi.SilentPaymentShares {
+				if x.EqualKey(share) {
+					return ErrDuplicateKey
+				}
+			}
+
+			pi.SilentPaymentShares = append(
+				pi.SilentPaymentShares, *share,
+			)
+
+		case SilentPaymentDLEQInputType:
+			proof, err := ReadSilentPaymentDLEQ(keyData, value)
+			if err != nil {
+				return err
+			}
+
+			// Duplicate keys are not allowed.
+			for _, x := range pi.SilentPaymentDLEQs {
+				if x.EqualKey(proof) {
+					return ErrDuplicateKey
+				}
+			}
+
+			pi.SilentPaymentDLEQs = append(
+				pi.SilentPaymentDLEQs, *proof,
+			)
+
+		case MuSig2ParticipantsInputType:
+			participants, err := ReadMuSig2Participants(
+				keyData, value,
+			)
+			if err != nil {
+				return err
+			}
+
+			// Duplicate keys are not allowed.
+			err = assertNoDuplicateKey(
+				participants, pi.MuSig2Participants,
+			)
+			if err != nil {
+				return err
+			}
+
+			pi.MuSig2Participants = append(
+				pi.MuSig2Participants, participants,
+			)
+
+		case MuSig2PubNoncesInputType:
+			nonce, err := ReadMuSig2PubNonce(keyData, value)
+			if err != nil {
+				return err
+			}
+
+			// Duplicate keys are not allowed.
+			err = assertNoDuplicateKey(nonce, pi.MuSig2PubNonces)
+			if err != nil {
+				return err
+			}
+
+			pi.MuSig2PubNonces = append(pi.MuSig2PubNonces, nonce)
+
+		case MuSig2PartialSigsInputType:
+			partialSig, err := ReadMuSig2PartialSig(keyData, value)
+			if err != nil {
+				return err
+			}
+
+			// Duplicate keys are not allowed.
+			err = assertNoDuplicateKey(
+				partialSig, pi.MuSig2PartialSigs,
+			)
+			if err != nil {
+				return err
+			}
+
+			pi.MuSig2PartialSigs = append(
+				pi.MuSig2PartialSigs, partialSig,
+			)
+
 		default:
 			// A fall through case for any proprietary types.
 			keyCodeAndData := append(
@@ -425,8 +516,11 @@ func (pi *PInput) serialize(w io.Writer) error {
 	}
 
 	if pi.FinalScriptSig == nil && pi.FinalScriptWitness == nil {
-		sort.Sort(PartialSigSorter(pi.PartialSigs))
-		for _, ps := range pi.PartialSigs {
+		// Sort a copy so that serialization does not mutate the
+		// caller's packet by reordering its signature slice.
+		partialSigs := slices.Clone(pi.PartialSigs)
+		sort.Sort(PartialSigSorter(partialSigs))
+		for _, ps := range partialSigs {
 			err := serializeKVPairWithType(
 				w, uint8(PartialSigType), ps.PubKey,
 				ps.Signature,
@@ -470,11 +564,11 @@ func (pi *PInput) serialize(w io.Writer) error {
 			}
 		}
 
-		sort.Sort(Bip32Sorter(pi.Bip32Derivation))
-		for _, kd := range pi.Bip32Derivation {
+		bip32Derivation := slices.Clone(pi.Bip32Derivation)
+		sort.Sort(Bip32Sorter(bip32Derivation))
+		for _, kd := range bip32Derivation {
 			err := serializeKVPairWithType(
-				w,
-				uint8(Bip32DerivationInputType), kd.PubKey,
+				w, uint8(Bip32DerivationInputType), kd.PubKey,
 				SerializeBIP32Derivation(
 					kd.MasterKeyFingerprint, kd.Bip32Path,
 				),
@@ -494,12 +588,20 @@ func (pi *PInput) serialize(w io.Writer) error {
 			}
 		}
 
-		sort.Slice(pi.TaprootScriptSpendSig, func(i, j int) bool {
-			return pi.TaprootScriptSpendSig[i].SortBefore(
-				pi.TaprootScriptSpendSig[j],
+		for idx, scriptSpend := range pi.TaprootScriptSpendSig {
+			if scriptSpend == nil {
+				return fmt.Errorf("nil taproot script spend "+
+					"signature at index %d: %w", idx,
+					ErrInvalidPsbtFormat)
+			}
+		}
+		taprootScriptSpendSig := slices.Clone(pi.TaprootScriptSpendSig)
+		sort.Slice(taprootScriptSpendSig, func(i, j int) bool {
+			return taprootScriptSpendSig[i].SortBefore(
+				taprootScriptSpendSig[j],
 			)
 		})
-		for _, scriptSpend := range pi.TaprootScriptSpendSig {
+		for _, scriptSpend := range taprootScriptSpendSig {
 			keyData := append([]byte{}, scriptSpend.XOnlyPubKey...)
 			keyData = append(keyData, scriptSpend.LeafHash...)
 			value := append([]byte{}, scriptSpend.Signature...)
@@ -515,12 +617,19 @@ func (pi *PInput) serialize(w io.Writer) error {
 			}
 		}
 
-		sort.Slice(pi.TaprootLeafScript, func(i, j int) bool {
-			return pi.TaprootLeafScript[i].SortBefore(
-				pi.TaprootLeafScript[j],
+		for idx, leafScript := range pi.TaprootLeafScript {
+			if leafScript == nil {
+				return fmt.Errorf("nil taproot leaf script at "+
+					"index %d: %w", idx, ErrInvalidPsbtFormat)
+			}
+		}
+		taprootLeafScript := slices.Clone(pi.TaprootLeafScript)
+		sort.Slice(taprootLeafScript, func(i, j int) bool {
+			return taprootLeafScript[i].SortBefore(
+				taprootLeafScript[j],
 			)
 		})
-		for _, leafScript := range pi.TaprootLeafScript {
+		for _, leafScript := range taprootLeafScript {
 			value := append([]byte{}, leafScript.Script...)
 			value = append(value, byte(leafScript.LeafVersion))
 			err := serializeKVPairWithType(
@@ -532,12 +641,21 @@ func (pi *PInput) serialize(w io.Writer) error {
 			}
 		}
 
-		sort.Slice(pi.TaprootBip32Derivation, func(i, j int) bool {
-			return pi.TaprootBip32Derivation[i].SortBefore(
-				pi.TaprootBip32Derivation[j],
+		for idx, derivation := range pi.TaprootBip32Derivation {
+			if derivation == nil {
+				return fmt.Errorf("nil taproot BIP32 derivation at "+
+					"index %d: %w", idx, ErrInvalidPsbtFormat)
+			}
+		}
+		taprootBip32Derivation := slices.Clone(
+			pi.TaprootBip32Derivation,
+		)
+		sort.Slice(taprootBip32Derivation, func(i, j int) bool {
+			return taprootBip32Derivation[i].SortBefore(
+				taprootBip32Derivation[j],
 			)
 		})
-		for _, derivation := range pi.TaprootBip32Derivation {
+		for _, derivation := range taprootBip32Derivation {
 			value, err := SerializeTaprootBip32Derivation(
 				derivation,
 			)
@@ -567,6 +685,92 @@ func (pi *PInput) serialize(w io.Writer) error {
 			err := serializeKVPairWithType(
 				w, uint8(TaprootMerkleRootType), nil,
 				pi.TaprootMerkleRoot,
+			)
+			if err != nil {
+				return err
+			}
+		}
+
+		// Serialize the input's silent payment shares.
+		for _, share := range pi.SilentPaymentShares {
+			keyBytes, valueBytes := SerializeSilentPaymentShare(
+				&share,
+			)
+			err := serializeKVPairWithType(
+				w, uint8(SilentPaymentShareInputType), keyBytes,
+				valueBytes,
+			)
+			if err != nil {
+				return err
+			}
+		}
+
+		// Serialize the input's silent payment DLEQ proofs.
+		for _, dleq := range pi.SilentPaymentDLEQs {
+			keyBytes, valueBytes := SerializeSilentPaymentDLEQ(
+				&dleq,
+			)
+			err := serializeKVPairWithType(
+				w, uint8(SilentPaymentDLEQInputType), keyBytes,
+				valueBytes,
+			)
+			if err != nil {
+				return err
+			}
+		}
+
+		err := assertNoNilElements(pi.MuSig2Participants)
+		if err != nil {
+			return err
+		}
+		slices.SortFunc(
+			pi.MuSig2Participants,
+			func(a, b *MuSig2Participants) int {
+				return bytes.Compare(a.KeyData(), b.KeyData())
+			},
+		)
+		for _, participants := range pi.MuSig2Participants {
+			err := SerializeMuSig2Participants(
+				w, uint8(MuSig2ParticipantsInputType),
+				participants,
+			)
+			if err != nil {
+				return err
+			}
+		}
+
+		err = assertNoNilElements(pi.MuSig2PubNonces)
+		if err != nil {
+			return err
+		}
+		slices.SortFunc(
+			pi.MuSig2PubNonces, func(a, b *MuSig2PubNonce) int {
+				return bytes.Compare(a.KeyData(), b.KeyData())
+			},
+		)
+		for _, nonce := range pi.MuSig2PubNonces {
+			err := SerializeMuSig2PubNonce(
+				w, uint8(MuSig2PubNoncesInputType),
+				nonce,
+			)
+			if err != nil {
+				return err
+			}
+		}
+
+		err = assertNoNilElements(pi.MuSig2PartialSigs)
+		if err != nil {
+			return err
+		}
+		slices.SortFunc(
+			pi.MuSig2PartialSigs, func(a, b *MuSig2PartialSig) int {
+				return bytes.Compare(a.KeyData(), b.KeyData())
+			},
+		)
+		for _, sig := range pi.MuSig2PartialSigs {
+			err := SerializeMuSig2PartialSig(
+				w, uint8(MuSig2PartialSigsInputType),
+				sig,
 			)
 			if err != nil {
 				return err

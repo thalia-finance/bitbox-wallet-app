@@ -2,7 +2,10 @@ package psbt
 
 import (
 	"bytes"
+	"encoding/binary"
+	"fmt"
 	"io"
+	"slices"
 	"sort"
 
 	"github.com/btcsuite/btcd/wire/v2"
@@ -17,6 +20,9 @@ type POutput struct {
 	TaprootInternalKey     []byte
 	TaprootTapTree         []byte
 	TaprootBip32Derivation []*TaprootBip32Derivation
+	SilentPaymentInfo      *SilentPaymentInfo
+	SilentPaymentLabel     *uint32
+	MuSig2Participants     []*MuSig2Participants
 	Unknowns               []*Unknown
 }
 
@@ -144,6 +150,58 @@ func (po *POutput) deserialize(r io.Reader) error {
 				po.TaprootBip32Derivation, taprootDerivation,
 			)
 
+		case SilentPaymentV0InfoOutputType:
+			if po.SilentPaymentInfo != nil {
+				return ErrDuplicateKey
+			}
+
+			if len(keyData) != 0 {
+				return ErrInvalidKeyData
+			}
+
+			info, err := ReadSilentPaymentInfo(value)
+			if err != nil {
+				return err
+			}
+
+			po.SilentPaymentInfo = info
+
+		case SilentPaymentV0LabelOutputType:
+			if po.SilentPaymentLabel != nil {
+				return ErrDuplicateKey
+			}
+
+			if len(keyData) != 0 {
+				return ErrInvalidKeyData
+			}
+
+			label, err := ReadSilentPaymentLabel(value)
+			if err != nil {
+				return err
+			}
+
+			po.SilentPaymentLabel = &label
+
+		case MuSig2ParticipantsOutputType:
+			participants, err := ReadMuSig2Participants(
+				keyData, value,
+			)
+			if err != nil {
+				return err
+			}
+
+			// Duplicate keys are not allowed.
+			err = assertNoDuplicateKey(
+				participants, po.MuSig2Participants,
+			)
+			if err != nil {
+				return err
+			}
+
+			po.MuSig2Participants = append(
+				po.MuSig2Participants, participants,
+			)
+
 		default:
 			// A fall through case for any proprietary types.
 			keyCodeAndData := append(
@@ -190,14 +248,15 @@ func (po *POutput) serialize(w io.Writer) error {
 		}
 	}
 
-	sort.Sort(Bip32Sorter(po.Bip32Derivation))
-	for _, kd := range po.Bip32Derivation {
-		err := serializeKVPairWithType(w,
-			uint8(Bip32DerivationOutputType),
-			kd.PubKey,
+	// Sort a copy so that serialization does not mutate the caller's packet
+	// by reordering its derivation slice.
+	bip32Derivation := slices.Clone(po.Bip32Derivation)
+	sort.Sort(Bip32Sorter(bip32Derivation))
+	for _, kd := range bip32Derivation {
+		err := serializeKVPairWithType(
+			w, uint8(Bip32DerivationOutputType), kd.PubKey,
 			SerializeBIP32Derivation(
-				kd.MasterKeyFingerprint,
-				kd.Bip32Path,
+				kd.MasterKeyFingerprint, kd.Bip32Path,
 			),
 		)
 		if err != nil {
@@ -225,12 +284,19 @@ func (po *POutput) serialize(w io.Writer) error {
 		}
 	}
 
-	sort.Slice(po.TaprootBip32Derivation, func(i, j int) bool {
-		return po.TaprootBip32Derivation[i].SortBefore(
-			po.TaprootBip32Derivation[j],
+	for idx, derivation := range po.TaprootBip32Derivation {
+		if derivation == nil {
+			return fmt.Errorf("nil taproot BIP32 derivation at "+
+				"index %d: %w", idx, ErrInvalidPsbtFormat)
+		}
+	}
+	taprootBip32Derivation := slices.Clone(po.TaprootBip32Derivation)
+	sort.Slice(taprootBip32Derivation, func(i, j int) bool {
+		return taprootBip32Derivation[i].SortBefore(
+			taprootBip32Derivation[j],
 		)
 	})
-	for _, derivation := range po.TaprootBip32Derivation {
+	for _, derivation := range taprootBip32Derivation {
 		value, err := SerializeTaprootBip32Derivation(
 			derivation,
 		)
@@ -240,6 +306,47 @@ func (po *POutput) serialize(w io.Writer) error {
 		err = serializeKVPairWithType(
 			w, uint8(TaprootBip32DerivationOutputType),
 			derivation.XOnlyPubKey, value,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	if po.SilentPaymentInfo != nil {
+		err := serializeKVPairWithType(
+			w, uint8(SilentPaymentV0InfoOutputType), nil,
+			SerializeSilentPaymentInfo(po.SilentPaymentInfo),
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	if po.SilentPaymentLabel != nil {
+		var labelBytes [uint32Size]byte
+		binary.LittleEndian.PutUint32(
+			labelBytes[:], *po.SilentPaymentLabel,
+		)
+		err := serializeKVPairWithType(
+			w, uint8(SilentPaymentV0LabelOutputType), nil,
+			labelBytes[:],
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := assertNoNilElements(po.MuSig2Participants); err != nil {
+		return err
+	}
+	slices.SortFunc(
+		po.MuSig2Participants, func(a, b *MuSig2Participants) int {
+			return bytes.Compare(a.KeyData(), b.KeyData())
+		},
+	)
+	for _, participants := range po.MuSig2Participants {
+		err := SerializeMuSig2Participants(
+			w, uint8(MuSig2ParticipantsOutputType), participants,
 		)
 		if err != nil {
 			return err

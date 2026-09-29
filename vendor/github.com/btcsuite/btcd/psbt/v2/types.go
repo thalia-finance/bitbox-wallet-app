@@ -30,6 +30,21 @@ const (
 	// extended public key.
 	XPubType GlobalType = 1
 
+	// GenericSignedMessageType is used to house a BIP-0322 generic signed
+	// message, encoded as UTF-8.
+	//
+	// The key is {0x09} with no key data, and the value is the UTF-8
+	// encoded message.
+	GenericSignedMessageType GlobalType = 0x09
+
+	// SilentPaymentShareType is used to house the ECDH shares for silent
+	// payments.
+	SilentPaymentShareType GlobalType = 0x07
+
+	// SilentPaymentDLEQType is used to house the DLEQ proofs for silent
+	// payments.
+	SilentPaymentDLEQType GlobalType = 0x08
+
 	// VersionType houses the global version number of this PSBT. There is
 	// no key (only contains the byte type), then the value if omitted, is
 	// assumed to be zero.
@@ -151,6 +166,32 @@ const (
 	// 32-byte hash denoting the root hash of a merkle tree of scripts.
 	TaprootMerkleRootType InputType = 0x18
 
+	// SilentPaymentShareInputType is used to house the ECDH share for a
+	// single input in silent payments.
+	SilentPaymentShareInputType InputType = 0x1d
+
+	// SilentPaymentDLEQInputType is used to house the DLEQ proofs for a
+	// single input in silent payments.
+	SilentPaymentDLEQInputType InputType = 0x1e
+
+	// MuSig2ParticipantsInputType is a type that carries the participant
+	// public keys and aggregated key for a MuSig2 signing session
+	// ({0x1a}|{aggregate_key}). The value is a list of 33-byte compressed
+	// public keys in the order required for aggregation.
+	MuSig2ParticipantsInputType InputType = 0x1a
+
+	// MuSig2PubNoncesInputType is a type that carries the public nonces
+	// provided by participants in a MuSig2 signing session
+	// ({0x1b}|{participant_key}|{aggregate_key}[|{tapleaf_hash}]). The
+	// value is the 66-byte public nonces provided by the participant.
+	MuSig2PubNoncesInputType InputType = 0x1b
+
+	// MuSig2PartialSigsInputType is a type that carries the partial
+	// signatures provided by participants in a MuSig2 signing session
+	// ({0x1c}|{participant_key}|{aggregate_key}[|{tapleaf_hash}]). The
+	// value is the 32-byte partial signature provided by the participant.
+	MuSig2PartialSigsInputType InputType = 0x1c
+
 	// ProprietaryInputType is a custom type for use by devs.
 	//
 	// The key ({0xFC}|<prefix>|{subtype}|{key data}), is a Variable length
@@ -200,4 +241,19 @@ const (
 	// followed by said number of 32-byte leaf hashes. The rest of the value
 	// is then identical to the Bip32DerivationInputType value.
 	TaprootBip32DerivationOutputType OutputType = 7
+
+	// MuSig2ParticipantsOutputType is a type that carries the participant
+	// public keys and aggregated key for a MuSig2 signing session
+	// ({0x08}|{aggregate_key}). The value is a list of 33-byte compressed
+	// public keys in the order required for aggregation.
+	MuSig2ParticipantsOutputType OutputType = 0x08
+
+	// SilentPaymentV0InfoOutputType is used to house the silent payment
+	// recipient information for a version 0 silent payment output.
+	SilentPaymentV0InfoOutputType OutputType = 0x09
+
+	// SilentPaymentV0LabelOutputType is used to house the silent payment
+	// label for a version 0 silent payment output, which is used to compute
+	// the spend key of the silent payments address to verify change.
+	SilentPaymentV0LabelOutputType OutputType = 0x0a
 )

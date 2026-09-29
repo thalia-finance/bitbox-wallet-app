@@ -57,25 +57,30 @@ const (
 var (
 	// ErrDeriveHardFromPublic describes an error in which the caller
 	// attempted to derive a hardened extended key from a public key.
-	ErrDeriveHardFromPublic = errors.New("cannot derive a hardened key " +
-		"from a public key")
+	ErrDeriveHardFromPublic = errors.New(
+		"cannot derive a hardened key from a public key",
+	)
 
 	// ErrDeriveBeyondMaxDepth describes an error in which the caller
 	// has attempted to derive more than 255 keys from a root key.
-	ErrDeriveBeyondMaxDepth = errors.New("cannot derive a key with more than " +
-		"255 indices in its path")
+	ErrDeriveBeyondMaxDepth = errors.New(
+		"cannot derive a key with more than 255 indices in its path",
+	)
 
 	// ErrNotPrivExtKey describes an error in which the caller attempted
 	// to extract a private key from a public extended key.
-	ErrNotPrivExtKey = errors.New("unable to create private keys from a " +
-		"public extended key")
+	ErrNotPrivExtKey = errors.New(
+		"unable to create private keys from a public extended key",
+	)
 
 	// ErrInvalidChild describes an error in which the child at a specific
 	// index is invalid due to the derived key falling outside of the valid
 	// range for secp256k1 private keys.  This error indicates the caller
 	// should simply ignore the invalid child extended key at this index and
 	// increment to the next index.
-	ErrInvalidChild = errors.New("the extended key at this index is invalid")
+	ErrInvalidChild = errors.New(
+		"the extended key at this index is invalid",
+	)
 
 	// ErrUnusableSeed describes an error in which the provided seed is not
 	// usable due to the derived key falling outside of the valid range for
@@ -94,13 +99,24 @@ var (
 
 	// ErrInvalidKeyLen describes an error in which the provided serialized
 	// key is not the expected length.
-	ErrInvalidKeyLen = errors.New("the provided serialized extended key " +
-		"length is invalid")
-)
+	ErrInvalidKeyLen = errors.New(
+		"the provided serialized extended key length is invalid",
+	)
 
-// masterKey is the master key used along with a random seed used to generate
-// the master node in the hierarchical tree.
-var masterKey = []byte("Bitcoin seed")
+	// ErrInvalidRootMetadata indicates a depth-zero key with a nonzero
+	// parent fingerprint or child number, contrary to BIP32.
+	ErrInvalidRootMetadata = errors.New(
+		"invalid extended root key metadata",
+	)
+
+	// ErrInvalidKeyVersion indicates an unregistered version or a version
+	// whose public/private kind does not match the serialized key data.
+	ErrInvalidKeyVersion = errors.New("invalid extended key version")
+
+	// masterKey is the master key used along with a random seed used to
+	// generate the master node in the hierarchical tree.
+	masterKey = []byte("Bitcoin seed")
+)
 
 // ExtendedKey houses all the information needed to support a hierarchical
 // deterministic extended key.  See the package overview documentation for
@@ -226,6 +242,13 @@ func (k *ExtendedKey) ChainCode() []byte {
 // returned if this should occur, and the caller is expected to ignore the
 // invalid child and simply increment to the next index.
 func (k *ExtendedKey) Derive(i uint32) (*ExtendedKey, error) {
+	return k.derive(i, nil)
+}
+
+// derive performs BIP32 child derivation and, on success, optionally copies the
+// raw I_L tweak into tweak. Keeping both APIs on this path prevents public key
+// derivation and the tweaks used by signers from disagreeing.
+func (k *ExtendedKey) derive(i uint32, tweak *[32]byte) (*ExtendedKey, error) {
 	// Prevent derivation of children beyond the max allowed depth.
 	if k.depth == maxUint8 {
 		return nil, ErrDeriveBeyondMaxDepth
@@ -285,100 +308,23 @@ func (k *ExtendedKey) Derive(i uint32) (*ExtendedKey, error) {
 	il := ilr[:len(ilr)/2]
 	childChainCode := ilr[len(ilr)/2:]
 
-	// Both derived public or private keys rely on treating the left 32-byte
-	// sequence calculated above (Il) as a 256-bit integer that must be
-	// within the valid range for a secp256k1 private key.  There is a small
-	// chance (< 1 in 2^127) this condition will not hold, and in that case,
-	// a child extended key can't be created for this index and the caller
-	// should simply increment to the next index.
-	var ilNum btcec.ModNScalar
-	if overflow := ilNum.SetByteSlice(il); overflow {
-		return nil, ErrInvalidChild
-	}
-
-	// The algorithm used to derive the child key depends on whether or not
-	// a private or public child is being derived.
-	//
-	// For private children:
-	//   childKey = parse256(Il) + parentKey
-	//
-	// For public children:
-	//   childKey = serP(point(parse256(Il)) + parentKey)
-	var isPrivate bool
-	var childKey []byte
-	if k.isPrivate {
-		// Case #1 or #2.
-		// Add the parent private key to the intermediate private key to
-		// derive the final child key.
-		//
-		// childKey = parse256(Il) + parenKey
-		var keyNum btcec.ModNScalar
-		if overflow := keyNum.SetByteSlice(k.key); overflow {
-			return nil, ErrInvalidChild
-		}
-
-		childKeyBytes := ilNum.Add(&keyNum).Bytes()
-		childKey = childKeyBytes[:]
-
-		// Strip leading zeroes from childKey, to match the expectation
-		// as the old big.Int usage in this area of the codebase.
-		for len(childKey) > 0 && childKey[0] == 0x00 {
-			childKey = childKey[1:]
-		}
-
-		isPrivate = true
-	} else {
-		// Case #3.
-		// Calculate the corresponding intermediate public key for thek
-		// intermediate private key: ilJ = ilScalar*G
-		var (
-			ilScalar btcec.ModNScalar
-			ilJ      btcec.JacobianPoint
-		)
-		if overflow := ilScalar.SetByteSlice(il); overflow {
-			return nil, ErrInvalidChild
-		}
-		btcec.ScalarBaseMultNonConst(&ilScalar, &ilJ)
-
-		if (ilJ.X.IsZero() && ilJ.Y.IsZero()) || ilJ.Z.IsZero() {
-			return nil, ErrInvalidChild
-		}
-
-		// Convert the serialized compressed parent public key into X
-		// and Y coordinates so it can be added to the intermediate
-		// public key.
-		pubKey, err := btcec.ParsePubKey(k.key)
-		if err != nil {
-			return nil, err
-		}
-
-		// Convert the public key to jacobian coordinates, as that's
-		// what our main add/double methods use.
-		var pubKeyJ btcec.JacobianPoint
-		pubKey.AsJacobian(&pubKeyJ)
-
-		// Add the intermediate public key to the parent public key to
-		// derive the final child key.
-		//
-		// childKey = serP(point(parse256(Il)) + parentKey)
-		var childKeyPubJ btcec.JacobianPoint
-		btcec.AddNonConst(&ilJ, &pubKeyJ, &childKeyPubJ)
-
-		// Convert the new child public key back to affine coordinates
-		// so we can serialize it in compressed format.
-		childKeyPubJ.ToAffine()
-		childKeyPub := btcec.NewPublicKey(
-			&childKeyPubJ.X, &childKeyPubJ.Y,
-		)
-
-		childKey = childKeyPub.SerializeCompressed()
+	// Apply the tweak and reject an invalid final scalar or point before
+	// exposing either the derived key or the optional signing tweak.
+	childKey, err := k.deriveChildKey(il)
+	if err != nil {
+		return nil, err
 	}
 
 	// The fingerprint of the parent for the derived child is the first 4
 	// bytes of the RIPEMD160(SHA256(parentPubKey)).
 	parentFP := address.Hash160(k.pubKeyBytes())[:4]
-	return NewExtendedKey(k.version, childKey, childChainCode, parentFP,
-		k.depth+1, i, isPrivate), nil
+	if tweak != nil {
+		copy(tweak[:], il)
+	}
+	return NewExtendedKey(
+		k.version, childKey, childChainCode, parentFP, k.depth+1, i,
+		k.isPrivate,
+	), nil
 }
 
 // Returns true if this key was affected by the BIP-32 issue in the Child
@@ -681,7 +627,10 @@ func NewMaster(seed []byte, net *chaincfg.Params) (*ExtendedKey, error) {
 }
 
 // NewKeyFromString returns a new extended key instance from a base58-encoded
-// extended key.
+// extended key. It checks the length, checksum and key material, but preserves
+// the legacy behavior of accepting arbitrary version bytes and root metadata.
+// The key data, not the version, determines whether the key is private.
+// Use NewKeyFromStringStrict to also validate the version and root metadata.
 func NewKeyFromString(key string) (*ExtendedKey, error) {
 	// The base58-decoded extended key must consist of a serialized payload
 	// plus an additional 4 bytes for the checksum.
@@ -732,6 +681,46 @@ func NewKeyFromString(key string) (*ExtendedKey, error) {
 
 	return NewExtendedKey(version, keyData, chainCode, parentFP, depth,
 		childNum, isPrivate), nil
+}
+
+// NewKeyFromStringStrict parses an extended key like NewKeyFromString, with
+// additional BIP32 encoding checks. A depth-zero key must have a zero parent
+// fingerprint and child number, otherwise ErrInvalidRootMetadata is returned.
+// The version must be registered with chaincfg and match the public/private
+// key data, otherwise ErrInvalidKeyVersion is returned.
+//
+// Custom versions can be registered with chaincfg.RegisterHDKeyID. Bitcoin's
+// SLIP-0132 pairs can be enabled with chaincfg.RegisterSLIP132KeyIDs. Complete
+// registration before concurrent parsing or other registry lookups. This
+// function never registers versions, rewrites them or selects an address type.
+func NewKeyFromStringStrict(key string) (*ExtendedKey, error) {
+	// Keep checksum, scalar and curve validation on the legacy decoding
+	// path so both entry points agree on the underlying key material.
+	parsed, err := NewKeyFromString(key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Roots have no parent or child index. This is independent of version
+	// registration, so SLIP-0132 keys must satisfy the same metadata rules.
+	if parsed.depth == 0 && (parsed.childNum != 0 ||
+		binary.BigEndian.Uint32(parsed.parentFP) != 0) {
+
+		return nil, ErrInvalidRootMetadata
+	}
+
+	// Validate the encoding's kind using the registered version pair, not
+	// its human-readable Base58 prefix. Private-to-public conversion uses
+	// this same registry in Neuter.
+	validVersion := chaincfg.IsHDPublicKeyID(parsed.version)
+	if parsed.isPrivate {
+		_, err := chaincfg.HDPrivateKeyToPublicKeyID(parsed.version)
+		validVersion = err == nil
+	}
+	if !validVersion {
+		return nil, ErrInvalidKeyVersion
+	}
+	return parsed, nil
 }
 
 // GenerateSeed returns a cryptographically secure random seed that can be used

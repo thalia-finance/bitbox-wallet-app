@@ -77,6 +77,17 @@ require (
 )
 
 replace (
-	github.com/BitBoxSwiss/bitbox02-api-go => github.com/thalia-finance/bitbox02-api-go v0.0.0-20260901052923-ca0709f18f3d
+	github.com/BitBoxSwiss/bitbox02-api-go => github.com/thalia-finance/bitbox02-api-go v0.0.0-20260929130542-45136b8656f8
 	github.com/BitBoxSwiss/block-client-go => github.com/thalia-finance/block-client-go v0.0.0-20260630084957-43366128a74f
+)
+
+// BIP-373 MuSig2 PSBT support (btcd PR 2198) and the MuSig2 signing helpers
+// it builds on are not in a btcd release yet.
+replace (
+	github.com/btcsuite/btcd/btcec/v2 => github.com/guggero/btcd/btcec/v2 v2.0.0-20260929124357-00028b43b277
+	github.com/btcsuite/btcd/btcutil/v2 => github.com/guggero/btcd/btcutil/v2 v2.0.0-20260929124357-00028b43b277
+	github.com/btcsuite/btcd/chaincfg/v2 => github.com/guggero/btcd/chaincfg/v2 v2.0.0-20260929124357-00028b43b277
+	github.com/btcsuite/btcd/psbt/v2 => github.com/guggero/btcd/psbt/v2 v2.0.0-20260929124357-00028b43b277
+	github.com/btcsuite/btcd/txscript/v2 => github.com/guggero/btcd/txscript/v2 v2.0.0-20260929124357-00028b43b277
+	github.com/btcsuite/btcd/wire/v2 => github.com/guggero/btcd/wire/v2 v2.0.0-20260929124357-00028b43b277
 )

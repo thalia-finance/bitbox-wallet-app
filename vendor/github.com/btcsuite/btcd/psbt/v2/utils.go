@@ -6,7 +6,6 @@ package psbt
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -278,17 +277,100 @@ func getKey(r io.Reader) (int, []byte, error) {
 	return int(keyType), keyData, nil
 }
 
-// readTxOut is a limited version of wire.ReadTxOut, because the latter is not
-// exported.
-func readTxOut(txout []byte) (*wire.TxOut, error) {
-	if len(txout) < 10 {
-		return nil, ErrInvalidPsbtFormat
+// assertFullyConsumed returns ErrInvalidPsbtFormat if r still has bytes
+// available after parsing.
+func assertFullyConsumed(r *bytes.Reader) error {
+	if r.Len() > 0 {
+		return ErrInvalidPsbtFormat
 	}
 
-	valueSer := binary.LittleEndian.Uint64(txout[:8])
-	scriptPubKey := txout[9:]
+	return nil
+}
 
-	return wire.NewTxOut(int64(valueSer), scriptPubKey), nil
+// assertNoDuplicateKey asserts that the new element's KeyData() doesn't collide
+// with an existing element.
+func assertNoDuplicateKey[T interface{ KeyData() []byte }](newItem T,
+	existingElements []T) error {
+
+	newKey := newItem.KeyData()
+	for _, x := range existingElements {
+		if bytes.Equal(x.KeyData(), newKey) {
+			return ErrDuplicateKey
+		}
+	}
+
+	return nil
+}
+
+// assertIndexValid makes sure the index is a valid slice index that doesn't
+// lead to an out-of-bound panic.
+func assertIndexValid[Slice interface{ ~[]E }, E any](idx int,
+	slice Slice) error {
+
+	if idx < 0 || idx >= len(slice) {
+		return ErrInvalidPsbtFormat
+	}
+
+	return nil
+}
+
+// assertNoNilElements makes sure the given slice contains no nil elements.
+func assertNoNilElements[Slice interface{ ~[]*E }, E any](slice Slice) error {
+	for idx, elem := range slice {
+		if elem == nil {
+			return fmt.Errorf("item %d is nil", idx)
+		}
+	}
+
+	return nil
+}
+
+// readTxOut parses a transaction output value and requires the full value to
+// be consumed.
+func readTxOut(txout []byte) (*wire.TxOut, error) {
+	txOut := &wire.TxOut{}
+	reader := bytes.NewReader(txout)
+
+	if err := wire.ReadTxOut(reader, 0, 0, txOut); err != nil {
+		return nil, err
+	}
+	if err := assertFullyConsumed(reader); err != nil {
+		return nil, err
+	}
+
+	// wire.ReadTxOut stores PkScript in an internal 4 MiB script slab.
+	// Compact it before storing the TxOut in the PSBT so tiny witness
+	// scripts do not retain the full slab.
+	script := make([]byte, len(txOut.PkScript))
+	copy(script, txOut.PkScript)
+	txOut.PkScript = script
+
+	return txOut, nil
+}
+
+// readTransaction parses a transaction value and requires the full value to
+// be consumed. PSBT transaction-valued fields contain exactly one network
+// serialized transaction, not a transaction prefix with arbitrary trailing
+// data.
+func readTransaction(txBytes []byte, noWitness bool) (*wire.MsgTx, error) {
+	tx := wire.NewMsgTx(2)
+	reader := bytes.NewReader(txBytes)
+
+	var err error
+	if noWitness {
+		err = tx.DeserializeNoWitness(reader)
+	} else {
+		err = tx.Deserialize(reader)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if err := assertFullyConsumed(reader); err != nil {
+		return nil, err
+	}
+
+	return tx, nil
 }
 
 // SumUtxoInputValues tries to extract the sum of all inputs specified in the
@@ -464,7 +546,16 @@ func NewFromSignedTx(tx *wire.MsgTx) (*Packet, [][]byte,
 func FindLeafScript(pInput *PInput,
 	targetLeafHash []byte) (*TaprootTapLeafScript, error) {
 
-	for _, leaf := range pInput.TaprootLeafScript {
+	if pInput == nil {
+		return nil, fmt.Errorf("nil PSBT input: %w", ErrInvalidPsbtFormat)
+	}
+
+	for idx, leaf := range pInput.TaprootLeafScript {
+		if leaf == nil {
+			return nil, fmt.Errorf("nil taproot leaf script at index "+
+				"%d: %w", idx, ErrInvalidPsbtFormat)
+		}
+
 		leafHash := txscript.TapLeaf{
 			LeafVersion: leaf.LeafVersion,
 			Script:      leaf.Script,
@@ -477,4 +568,49 @@ func FindLeafScript(pInput *PInput,
 
 	return nil, fmt.Errorf("leaf script for target leaf hash %x not "+
 		"found in input", targetLeafHash)
+}
+
+// PrevOutputFetcher returns a txscript.PrevOutFetcher built from the UTXO
+// information in a PSBT packet. Returns an error if no UTXO information is
+// present for an input.
+func PrevOutputFetcher(packet *Packet) (*txscript.MultiPrevOutFetcher, error) {
+	fetcher := txscript.NewMultiPrevOutFetcher(nil)
+	for idx, txIn := range packet.UnsignedTx.TxIn {
+		in := packet.Inputs[idx]
+
+		// If a PrevOutputFetcher is used in a P2TR signing context,
+		// every input's UTXO information will be looked up. Which means
+		// we can prevent a panic in such a case by requiring it to be
+		// set here.
+		if in.WitnessUtxo == nil && in.NonWitnessUtxo == nil {
+			return nil, fmt.Errorf("input %d has no UTXO info", idx)
+		}
+
+		if in.NonWitnessUtxo != nil {
+			prevIndex := txIn.PreviousOutPoint.Index
+
+			// Prevent a panic by checking the index is actually
+			// valid.
+			if prevIndex >= uint32(len(in.NonWitnessUtxo.TxOut)) {
+				return nil, fmt.Errorf("input %d has invalid "+
+					"UTXO information", idx)
+			}
+
+			fetcher.AddPrevOut(
+				txIn.PreviousOutPoint,
+				in.NonWitnessUtxo.TxOut[prevIndex],
+			)
+
+			continue
+		}
+
+		// Fall back to witness UTXO only for older wallets.
+		if in.WitnessUtxo != nil {
+			fetcher.AddPrevOut(
+				txIn.PreviousOutPoint, in.WitnessUtxo,
+			)
+		}
+	}
+
+	return fetcher, nil
 }
