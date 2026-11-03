@@ -14,7 +14,11 @@ import (
 // feeForSerializeSize calculates the required fee for a transaction of some
 // arbitrary size given a mempool's relay fee policy.
 func feeForSerializeSize(relayFeePerKb btcutil.Amount, txSerializeSize int, log *logrus.Entry) btcutil.Amount {
-	fee := relayFeePerKb * btcutil.Amount(txSerializeSize) / 1000
+	// Round up, as Bitcoin Core does when it checks the relay minimum
+	// (CFeeRate::GetFee uses EvaluateFeeUp). Rounding down pays one sat
+	// short at sub-sat/vB rates, e.g. 0.1 sat/vB * 154 vB = 15.4 -> 15,
+	// while the node requires 16.
+	fee := (relayFeePerKb*btcutil.Amount(txSerializeSize) + 999) / 1000
 
 	if fee == 0 && relayFeePerKb > 0 {
 		fee = relayFeePerKb
